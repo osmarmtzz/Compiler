@@ -12,8 +12,8 @@ namespace IDE_COMPILADOR
 
         private MenuStrip menuStrip;
         private ToolStrip toolStrip1;
-        private SplitContainer splitContainerMain; // NUEVO
-        private SplitContainer splitContainer;     // EXISTENTE (editor y análisis)
+        private SplitContainer splitContainerMain; // ARRIBA/ABAJO
+        private SplitContainer splitContainer;     // IZQUIERDA/DERECHA (editor / análisis)
         private Panel panelEditor;
         private Panel lineNumberPanel;
         private RichTextBox txtEditor;
@@ -25,17 +25,17 @@ namespace IDE_COMPILADOR
         private TabPage tabSemantico;
         private TabPage tabHashTable;
         private TabPage tabCodigoIntermedio;
-        private TabPage tabColores;                  // NUEVA pestaña
+        private TabPage tabColores;                  // (no usada, puedes quitarla si no la necesitas)
         private TableLayoutPanel tlpColores;
         private Panel panelFileExplorer;
         private FlowLayoutPanel panelFileExplorerButtons;
         private Button btnAgregarArchivo;
         private Button btnEliminarArchivo;
         private TreeView fileExplorer;
-        private TabControl tabOutput;
+        private TabControl tabOutput;               // ABAJO (errores, resultados, hash table extra)
         private Label lblStatus;
         private ToolTip toolTip1;
-        private Button btnToggleExplorer; // NUEVO botón para mostrar/ocultar explorador
+        private Button btnToggleExplorer;
 
         protected override void Dispose(bool disposing)
         {
@@ -51,7 +51,7 @@ namespace IDE_COMPILADOR
             this.components = new System.ComponentModel.Container();
             this.menuStrip = new MenuStrip();
             this.toolStrip1 = new ToolStrip();
-            this.splitContainerMain = new SplitContainer(); // INICIALIZAR
+            this.splitContainerMain = new SplitContainer(); // INICIALIZAR CONTENEDOR HORIZONTAL
             this.splitContainer = new SplitContainer();
             this.panelEditor = new Panel();
             this.lineNumberPanel = new Panel();
@@ -60,14 +60,8 @@ namespace IDE_COMPILADOR
             this.tabAnalysis = new TabControl();
             this.tabLexico = new TabPage();
             this.rtbLexico = new RichTextBox();
-            this.rtbLexico.Dock = DockStyle.Fill;
-            this.rtbLexico.Font = new Font("Consolas", 10);
-            this.rtbLexico.BackColor = Color.Black;
-            this.rtbLexico.ForeColor = Color.White;
-            this.rtbLexico.ReadOnly = true;
-            this.tabLexico.Controls.Add(this.rtbLexico);
-
             this.tabSintactico = new TabPage();
+            this.treeViewSintactico = new TreeView();
             this.tabSemantico = new TabPage();
             this.tabHashTable = new TabPage();
             this.tabCodigoIntermedio = new TabPage();
@@ -79,7 +73,7 @@ namespace IDE_COMPILADOR
             this.tabOutput = new TabControl();
             this.lblStatus = new Label();
             this.toolTip1 = new ToolTip(this.components);
-            this.btnToggleExplorer = new Button(); // INICIALIZAR BOTÓN
+            this.btnToggleExplorer = new Button();
 
             // menuStrip
             this.menuStrip.Dock = DockStyle.Top;
@@ -91,15 +85,13 @@ namespace IDE_COMPILADOR
             this.toolStrip1.Dock = DockStyle.Top;
             this.toolStrip1.BackColor = Color.FromArgb(28, 28, 48);
             this.toolStrip1.ForeColor = Color.White;
-            this.toolStrip1.ImageScalingSize = new Size(32, 32); // o 32x32 si prefieres un tamaño intermedio
+            this.toolStrip1.ImageScalingSize = new Size(32, 32);
             this.toolStrip1.GripStyle = ToolStripGripStyle.Hidden;
             this.toolStrip1.Padding = new Padding(5, 5, 5, 5);
             this.toolStrip1.AutoSize = false;
-            this.toolStrip1.Height = 50; // Asegura que todos los íconos encajen bien
+            this.toolStrip1.Height = 50;
 
-
-
-            // splitContainerMain (NUEVO - PARA EDITOR Y TABOUTPUT)
+            // splitContainerMain (EDITOR+ANÁLISIS arriba / OUTPUT abajo)
             this.splitContainerMain.Dock = DockStyle.Fill;
             this.splitContainerMain.Orientation = Orientation.Horizontal;
             this.splitContainerMain.SplitterDistance = 400;
@@ -158,13 +150,19 @@ namespace IDE_COMPILADOR
             this.tabHashTable.Text = "🔑 Hash Table";
             this.tabCodigoIntermedio.Text = "💻 Código Intermedio";
 
-            // inicializamos el TreeView para mostrar el AST
-            this.treeViewSintactico = new TreeView();
+            // rtbLexico dentro de tabLexico
+            this.rtbLexico.Dock = DockStyle.Fill;
+            this.rtbLexico.Font = new Font("Consolas", 10);
+            this.rtbLexico.BackColor = Color.Black;
+            this.rtbLexico.ForeColor = Color.White;
+            this.rtbLexico.ReadOnly = true;
+            this.tabLexico.Controls.Add(this.rtbLexico);
+
+            // TreeView Sintáctico
             this.treeViewSintactico.Dock = DockStyle.Fill;
             this.treeViewSintactico.BackColor = Color.Black;
             this.treeViewSintactico.ForeColor = Color.White;
             this.tabSintactico.Controls.Add(this.treeViewSintactico);
-
 
             this.tabAnalysis.TabPages.AddRange(new TabPage[] {
                 this.tabLexico, this.tabSintactico, this.tabSemantico, this.tabHashTable, this.tabCodigoIntermedio });
@@ -175,7 +173,7 @@ namespace IDE_COMPILADOR
             this.splitContainer.Panel1.Controls.Add(this.panelEditor);
             this.splitContainer.Panel2.Controls.Add(this.panelAnalysis);
 
-            // panelFileExplorer
+            // panelFileExplorer (derecha)
             this.panelFileExplorer.Dock = DockStyle.Right;
             this.panelFileExplorer.Width = 200;
             this.panelFileExplorer.BackColor = Color.FromArgb(40, 40, 60);
@@ -185,6 +183,9 @@ namespace IDE_COMPILADOR
             this.panelFileExplorerButtons.Height = 40;
             this.panelFileExplorerButtons.FlowDirection = FlowDirection.LeftToRight;
             this.panelFileExplorerButtons.Padding = new Padding(5);
+
+            this.btnAgregarArchivo.Text = "+";
+            this.btnEliminarArchivo.Text = "–";
 
             this.panelFileExplorerButtons.Controls.Add(this.btnAgregarArchivo);
             this.panelFileExplorerButtons.Controls.Add(this.btnEliminarArchivo);
@@ -197,7 +198,7 @@ namespace IDE_COMPILADOR
             this.panelFileExplorer.Controls.Add(this.fileExplorer);
             this.panelFileExplorer.Controls.Add(this.panelFileExplorerButtons);
 
-            // tabOutput
+            // tabOutput (abajo)
             this.tabOutput.Dock = DockStyle.Fill;
             this.tabOutput.BackColor = Color.FromArgb(15, 15, 25);
             this.tabOutput.ForeColor = Color.LightGreen;
@@ -208,7 +209,7 @@ namespace IDE_COMPILADOR
             this.lblStatus.ForeColor = Color.White;
             this.lblStatus.BackColor = Color.FromArgb(25, 25, 35);
 
-            // btnToggleExplorer (mostrar/ocultar explorador)
+            // btnToggleExplorer
             this.btnToggleExplorer.Dock = DockStyle.Right;
             this.btnToggleExplorer.Width = 25;
             this.btnToggleExplorer.Text = "⇆";

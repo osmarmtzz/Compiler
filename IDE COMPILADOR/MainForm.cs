@@ -1,22 +1,23 @@
-﻿using System;
+﻿
+using System;
 using System.IO;
 using System.Drawing;
 using System.Windows.Forms;
+using System.Linq;
+using System.Collections.Generic; // List<T>, LINQ
+using System.Runtime.InteropServices;             // <- Win32 helpers
 using IDE_COMPILADOR.AnalizadorLexico;
 using IDE_COMPILADOR.AnalizadorSintactico;
 using IDE_COMPILADOR.AnalizadorSintactico.AST;
-using System.Linq;                                   // ← nuevo
-
-
-
+using IDE_COMPILADOR.AnalizadorSemantico; // SymbolEntry, ToSource()
 
 namespace IDE_COMPILADOR
 {
     public partial class MainForm : Form
     {
         private string currentFilePath = string.Empty;
-        private RichTextBox rtbLexico;
-
+        private RichTextBox rtbLexico = null!;     // <- se crea en InitializeComponent()
+        private ProgramNode _lastAst = null;
 
         public MainForm()
         {
@@ -30,7 +31,7 @@ namespace IDE_COMPILADOR
             txtEditor.TextChanged += TxtEditor_TextChanged;
             txtEditor.VScroll += TxtEditor_VScroll;
             txtEditor.KeyDown += TxtEditor_KeyDown;
-
+            txtEditor.Resize += TxtEditor_Resize;
 
             // Evento de panel de números de línea
             lineNumberPanel.Paint += LineNumberPanel_Paint;
@@ -40,26 +41,21 @@ namespace IDE_COMPILADOR
             btnEliminarArchivo.Click += BtnEliminarArchivo_Click;
             fileExplorer.NodeMouseDoubleClick += FileExplorer_NodeMouseDoubleClick;
 
-            // Inicializaciones gráficas y lógicas
-            // (Opcional: Si deseas mantener el menú, déjalo; de lo contrario, puedes comentarlo)
+            // Menú (opcional)
             InicializarMenuPersonalizado();
 
-            // ToolStrip: Agregamos los botones con íconos, tooltips y el nuevo botón "New Project"
+            // ToolStrip
             InicializarToolStrip();
 
             // Moderniza botones del explorador
             ModernizarBotonesFileExplorer();
-            // Cargar ícono para los nodos del explorador de archivos
+
+            // Cargar íconos para nodos del explorador de archivos
             Image iconArchivo = Image.FromFile("Resources/Icons/archivo.png");
             Bitmap smallIcon = new Bitmap(iconArchivo, new Size(16, 16));
             fileExplorer.ImageList = new ImageList();
             fileExplorer.ImageList.Images.Add("archivo", smallIcon);
-            // Cargar los íconos una sola vez
-
-
             fileExplorer.ImageList.Images.Add("php", new Bitmap(Image.FromFile("Resources/Icons/php.png"), new Size(16, 16)));
-
-
 
             // TabControl inferior para errores/resultados
             InicializarTabOutput();
@@ -69,28 +65,23 @@ namespace IDE_COMPILADOR
 
         private void InicializarMenuPersonalizado()
         {
-            // Limpiamos cualquier ítem existente
             menuStrip.Items.Clear();
 
-            // Íconos de ejemplo
             Image openIcon = SystemIcons.Application.ToBitmap();
             Image saveIcon = SystemIcons.Information.ToBitmap();
             Image saveAsIcon = SystemIcons.Warning.ToBitmap();
 
-            // Menú "File"
             ToolStripMenuItem fileMenu = new ToolStripMenuItem("File");
             fileMenu.DropDownItems.Add(new ToolStripMenuItem("Open", openIcon, (s, e) => OpenFile()));
             fileMenu.DropDownItems.Add(new ToolStripMenuItem("Save", saveIcon, (s, e) => SaveFile()));
             fileMenu.DropDownItems.Add(new ToolStripMenuItem("Save As", saveAsIcon, (s, e) => SaveFileAs()));
 
-            // Íconos para el menú "Compile"
             Image lexicalIcon = SystemIcons.Information.ToBitmap();
             Image syntaxIcon = SystemIcons.Question.ToBitmap();
             Image semanticIcon = SystemIcons.Shield.ToBitmap();
             Image intermediateIcon = SystemIcons.WinLogo.ToBitmap();
             Image executionIcon = SystemIcons.Exclamation.ToBitmap();
 
-            // Menú "Compile"
             ToolStripMenuItem compileMenu = new ToolStripMenuItem("Compile");
             compileMenu.DropDownItems.Add(new ToolStripMenuItem("Lexical Analysis", lexicalIcon, (s, e) => EjecutarFase("Lexical Analysis")));
             compileMenu.DropDownItems.Add(new ToolStripMenuItem("Syntax Analysis", syntaxIcon, (s, e) => EjecutarFase("Syntax Analysis")));
@@ -98,14 +89,13 @@ namespace IDE_COMPILADOR
             compileMenu.DropDownItems.Add(new ToolStripMenuItem("Intermediate Code", intermediateIcon, (s, e) => EjecutarFase("Intermediate Code")));
             compileMenu.DropDownItems.Add(new ToolStripMenuItem("Execution", executionIcon, (s, e) => EjecutarFase("Execution")));
 
-            // Agregamos ambos menús al menuStrip
             menuStrip.Items.Add(fileMenu);
             menuStrip.Items.Add(compileMenu);
         }
 
         #endregion
 
-        #region ToolStrip con botones con íconos y ToolTip
+        #region ToolStrip con botones
 
         private void InicializarToolStrip()
         {
@@ -117,19 +107,14 @@ namespace IDE_COMPILADOR
             Image iconCorrerSemantico = Image.FromFile("Resources/Icons/semantico.png");
             Image iconGenerarCodigo = Image.FromFile("Resources/Icons/codigo-intermedio.png");
 
-
-
-
-
             toolStrip1.Items.Clear();
 
-            // Botón "New Project" con input
+            // New Project
             ToolStripButton newProjectButton = new ToolStripButton
             {
                 Image = iconNuevoProyecto,
                 ToolTipText = "Nuevo Proyecto"
             };
-
             newProjectButton.Click += (s, e) =>
             {
                 using (FolderBrowserDialog folderDialog = new FolderBrowserDialog())
@@ -148,21 +133,17 @@ namespace IDE_COMPILADOR
                             try
                             {
                                 Directory.CreateDirectory(rutaCompleta);
-                                MessageBox.Show($"Proyecto creado en:\n{rutaCompleta}", "Éxito", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                                MessageBox.Show($"Proyecto creado en:\n{rutaCompleta}", "Éxito",
+                                    MessageBoxButtons.OK, MessageBoxIcon.Information);
 
-                                MainForm nuevoForm = new MainForm
-                                {
-                                    Text = nombreProyecto // Cambia el título de la ventana
-                                };
-
-                                // Si deseas guardar la ruta, puedes hacerlo aquí:
+                                MainForm nuevoForm = new MainForm { Text = nombreProyecto };
                                 nuevoForm.currentFilePath = rutaCompleta;
-
                                 nuevoForm.Show();
                             }
                             catch (Exception ex)
                             {
-                                MessageBox.Show("Error al crear la carpeta:\n" + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                MessageBox.Show("Error al crear la carpeta:\n" + ex.Message,
+                                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                             }
                         }
                     }
@@ -170,8 +151,7 @@ namespace IDE_COMPILADOR
             };
             toolStrip1.Items.Add(newProjectButton);
 
-
-            // Botón "Build and Debug"
+            // Build & Debug
             ToolStripButton buildDebugButton = new ToolStripButton
             {
                 Image = iconBuildDebug,
@@ -180,7 +160,7 @@ namespace IDE_COMPILADOR
             buildDebugButton.Click += (s, e) => { /* lógica */ };
             toolStrip1.Items.Add(buildDebugButton);
 
-            // Botón "Cerrar ventana"
+            // Cerrar ventana
             ToolStripButton closeButton = new ToolStripButton
             {
                 Image = iconCerrarVentana,
@@ -189,7 +169,7 @@ namespace IDE_COMPILADOR
             closeButton.Click += (s, e) => this.Close();
             toolStrip1.Items.Add(closeButton);
 
-            // Botón "Léxico"
+            // Léxico
             ToolStripButton lexicoButton = new ToolStripButton
             {
                 Image = iconCorrerAnalizador,
@@ -198,7 +178,7 @@ namespace IDE_COMPILADOR
             lexicoButton.Click += (s, e) => EjecutarFase("Lexical Analysis");
             toolStrip1.Items.Add(lexicoButton);
 
-            // Botón "Sintáctico"
+            // Sintáctico
             ToolStripButton sintacticoButton = new ToolStripButton
             {
                 Image = iconCorrerSintactico,
@@ -207,7 +187,7 @@ namespace IDE_COMPILADOR
             sintacticoButton.Click += (s, e) => EjecutarFase("Syntax Analysis");
             toolStrip1.Items.Add(sintacticoButton);
 
-            // Botón "Semántico"
+            // Semántico
             ToolStripButton semanticoButton = new ToolStripButton
             {
                 Image = iconCorrerSemantico,
@@ -216,7 +196,7 @@ namespace IDE_COMPILADOR
             semanticoButton.Click += (s, e) => EjecutarFase("Semantic Analysis");
             toolStrip1.Items.Add(semanticoButton);
 
-            // Botón "Compilar"
+            // Código intermedio
             ToolStripButton compilarButton = new ToolStripButton
             {
                 Image = iconGenerarCodigo,
@@ -232,59 +212,28 @@ namespace IDE_COMPILADOR
 
         private void ModernizarBotonesFileExplorer()
         {
-
             Image iconOriginal2 = Image.FromFile("Resources/Icons/agregar-archivo.png");
             Image iconAgregar = new Bitmap(iconOriginal2, new Size(24, 24));
             Image iconOriginal = Image.FromFile("Resources/Icons/basura.png");
             Image iconBasura = new Bitmap(iconOriginal, new Size(24, 24));
 
-            // Ajustes para "Agregar Archivo"
+            // Agregar Archivo
             btnAgregarArchivo.FlatStyle = FlatStyle.Flat;
             btnAgregarArchivo.FlatAppearance.BorderSize = 0;
             btnAgregarArchivo.BackColor = Color.FromArgb(45, 45, 48);
             btnAgregarArchivo.FlatAppearance.MouseOverBackColor = Color.FromArgb(63, 63, 70);
             btnAgregarArchivo.Size = new Size(32, 32);
             btnAgregarArchivo.Image = iconAgregar;
-            btnEliminarArchivo.Text = ""; // Asegura que no haya texto ni emoji
+            btnEliminarArchivo.Text = "";
 
-
-            // Ajustes para "Eliminar Archivo"
+            // Eliminar Archivo
             btnEliminarArchivo.FlatStyle = FlatStyle.Flat;
             btnEliminarArchivo.FlatAppearance.BorderSize = 0;
             btnEliminarArchivo.BackColor = Color.FromArgb(45, 45, 48);
             btnEliminarArchivo.FlatAppearance.MouseOverBackColor = Color.FromArgb(63, 63, 70);
             btnEliminarArchivo.Size = new Size(32, 32);
             btnEliminarArchivo.Image = iconBasura;
-            btnEliminarArchivo.Text = ""; // Asegura que no haya texto ni emoji
-
-        }
-
-
-        // Crea un ícono base con un "plus" verde en la esquina
-        private Bitmap CrearIconoConPlus()
-        {
-            int baseW = 24, baseH = 24;
-            Bitmap baseIcon = new Bitmap(SystemIcons.WinLogo.ToBitmap(), new Size(baseW, baseH));
-            Bitmap plusIcon = new Bitmap(12, 12);
-            using (Graphics g = Graphics.FromImage(plusIcon))
-            {
-                g.Clear(Color.Transparent);
-                using (Pen pen = new Pen(Color.LimeGreen, 2))
-                {
-                    int c = plusIcon.Width / 2;
-                    g.DrawLine(pen, c, 2, c, plusIcon.Height - 2);
-                    g.DrawLine(pen, 2, c, plusIcon.Width - 2, c);
-                }
-            }
-            Bitmap composite = new Bitmap(baseIcon.Width, baseIcon.Height);
-            using (Graphics g = Graphics.FromImage(composite))
-            {
-                g.DrawImage(baseIcon, 0, 0);
-                int x = baseIcon.Width - plusIcon.Width;
-                int y = baseIcon.Height - plusIcon.Height;
-                g.DrawImage(plusIcon, x, y);
-            }
-            return composite;
+            btnEliminarArchivo.Text = "";
         }
 
         #endregion
@@ -294,7 +243,8 @@ namespace IDE_COMPILADOR
         private void InicializarTabOutput()
         {
             tabOutput.TabPages.Clear();
-            string[] nombresPestañas = { "Errores Lexicos", "Errores Sintacticos", "Errores Semanticos", "Resultados" };
+            // Incluimos "Hash Table" abajo
+            string[] nombresPestañas = { "Errores Lexicos", "Errores Sintacticos", "Errores Semanticos", "Resultados", "Hash Table" };
 
             foreach (string nombre in nombresPestañas)
             {
@@ -315,20 +265,39 @@ namespace IDE_COMPILADOR
 
         #endregion
 
+        #region Win32 helpers + números de línea
+
+        const int EM_GETFIRSTVISIBLELINE = 0x00CE;
+        const int EM_LINEINDEX = 0x00BB;
+        const int EM_GETLINECOUNT = 0x00BA;
+
+        [DllImport("user32.dll")]
+        private static extern int SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        private int FirstVisibleLine()
+            => SendMessage(txtEditor.Handle, EM_GETFIRSTVISIBLELINE, IntPtr.Zero, IntPtr.Zero);
+
+        private int LineIndex(int line)
+            => SendMessage(txtEditor.Handle, EM_LINEINDEX, (IntPtr)line, IntPtr.Zero);
+
+        private int LineCount()
+            => SendMessage(txtEditor.Handle, EM_GETLINECOUNT, IntPtr.Zero, IntPtr.Zero);
+
+        #endregion
+
         #region Eventos del Editor y Números de Línea
 
-        private void TxtEditor_SelectionChanged(object sender, EventArgs e)
+        private void TxtEditor_SelectionChanged(object? sender, EventArgs e)
         {
             UpdateLineColumn();
+            lineNumberPanel.Invalidate();
         }
-        // 1) Flag para detectar pegado
+
+        // Flags
         private bool pasteDetected = false;
-        // para llevar el estado de comentario multilínea
-        private bool insideBlockComment = false;
+        private bool insideBlockComment = false; // (warning si no se usa)
 
-
-        // 3) TxtEditor_TextChanged: colorear sólo la línea activa 
-        private void TxtEditor_TextChanged(object sender, EventArgs e)
+        private void TxtEditor_TextChanged(object? sender, EventArgs e)
         {
             UpdateLineColumn();
             lineNumberPanel.Invalidate();
@@ -337,14 +306,12 @@ namespace IDE_COMPILADOR
 
             if (pasteDetected)
             {
-                // full coloreado tras pegar
                 pasteDetected = false;
                 var (tokens, _) = analizador.Analizar(txtEditor.Text);
                 AplicarColoreadoCompleto(tokens);
             }
             else
             {
-                // Detectar si se escribió un comentario bloque
                 if (txtEditor.Text.Contains("/*") && txtEditor.Text.Contains("*/"))
                 {
                     var (tokens, _) = analizador.Analizar(txtEditor.Text);
@@ -352,7 +319,6 @@ namespace IDE_COMPILADOR
                 }
                 else
                 {
-                    // Colorear solo la línea modificada
                     int lineIndex = txtEditor.GetLineFromCharIndex(txtEditor.SelectionStart);
                     int start = txtEditor.GetFirstCharIndexFromLine(lineIndex);
                     int end = (lineIndex == txtEditor.Lines.Length - 1)
@@ -367,8 +333,6 @@ namespace IDE_COMPILADOR
             }
         }
 
-
-        // ??? 4) Método para colorear TODO el documento (al cargar) ?????????????????
         private void AplicarColoreadoCompleto(List<Token> tokens)
         {
             int selStart = txtEditor.SelectionStart;
@@ -377,11 +341,9 @@ namespace IDE_COMPILADOR
             txtEditor.TextChanged -= TxtEditor_TextChanged;
             txtEditor.SuspendLayout();
 
-            // 1) limpiar a blanco
             txtEditor.SelectAll();
             txtEditor.SelectionColor = Color.White;
 
-            // 2) pintar cada token por su posición
             foreach (var t in tokens)
             {
                 int lineIdx = t.Linea - 1;
@@ -392,13 +354,12 @@ namespace IDE_COMPILADOR
                 txtEditor.SelectionColor = ColorForToken(t.Tipo, t.Valor);
             }
 
-            // 3) restaurar selección
             txtEditor.Select(selStart, selLen);
             txtEditor.SelectionColor = Color.White;
             txtEditor.ResumeLayout();
             txtEditor.TextChanged += TxtEditor_TextChanged;
         }
-        // ??? 5) Método para colorear sólo 1 línea (al tipear) 
+
         private void AplicarColoreadoLinea(List<Token> tokens, int offset)
         {
             int selStart = txtEditor.SelectionStart;
@@ -421,73 +382,76 @@ namespace IDE_COMPILADOR
             txtEditor.ResumeLayout();
             txtEditor.TextChanged += TxtEditor_TextChanged;
         }
-        // 3) Captura Ctrl+V y Shift+Insert
-        private void TxtEditor_KeyDown(object sender, KeyEventArgs e)
+
+        private void TxtEditor_KeyDown(object? sender, KeyEventArgs e)
         {
             if ((e.Control && e.KeyCode == Keys.V) || (e.Shift && e.KeyCode == Keys.Insert))
                 pasteDetected = true;
         }
 
-
-        // ??? 6) ColorForToken: define tus colores según el tipo ????????????????????
-        // ─── Firma nueva para recibir tipo y valor ────────────────────────────────
         private Color ColorForToken(string tipo, string valor)
         {
             return tipo switch
             {
-                // Color 1: Números enteros y reales (con y sin signo)
                 "Numero" or "PuntoFlotante" => Color.LightGreen,
-
-                // Color 2: Identificadores (letras y dígitos, sin comenzar por dígito)
                 "Identificador" => Color.Cyan,
-
-                // Color 3: Comentarios (inline "//…" y multilínea "/*…*/")
                 "ComentarioInline" or "ComentarioExtenso" => Color.Gray,
-
-                // Color 4: Palabras reservadas: if, else, end, do, while, switch,
-                // case, int, float, main, cin, cout
                 "PalabraReservada" => Color.Orange,
-
-                // Color 5: Operadores aritméticos: +, -, *, /, %, ^, ++, --
                 "OperadorAritmetico" => Color.Yellow,
-
-                // Color 6: 
-              
-                "OperadorRelacional" or
-                "OperadorLogico" or
-                "Asignacion" or
-                "Simbolo" => Color.Red,
-
-                // Por defecto: color de texto normal
+                "OperadorRelacional" or "OperadorLogico" or "Asignacion" or "Simbolo" => Color.Red,
                 _ => Color.White,
             };
         }
 
-
-
-        private void TxtEditor_VScroll(object sender, EventArgs e)
+        private void TxtEditor_VScroll(object? sender, EventArgs e)
         {
             lineNumberPanel.Invalidate();
         }
 
-        private void LineNumberPanel_Paint(object sender, PaintEventArgs e)
+        private void TxtEditor_Resize(object? sender, EventArgs e)
         {
-            if (txtEditor == null) return;
+            lineNumberPanel.Invalidate();
+        }
 
-            int firstIndex = txtEditor.GetCharIndexFromPosition(new Point(0, 0));
-            int firstLine = txtEditor.GetLineFromCharIndex(firstIndex);
-            int lastIndex = txtEditor.GetCharIndexFromPosition(new Point(0, txtEditor.Height));
-            int lastLine = txtEditor.GetLineFromCharIndex(lastIndex);
+        private void LineNumberPanel_Paint(object? sender, PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.Clear(Color.FromArgb(50, 50, 70));
 
-            using (SolidBrush brush = new SolidBrush(Color.Black))
-            using (Font font = new Font("Consolas", 10))
+            int totalLines = LineCount();
+            int firstLine = FirstVisibleLine();
+            if (totalLines <= 0) return;
+
+            using var f = new Font("JetBrains Mono", txtEditor.Font.Size, FontStyle.Regular);
+
+            // ancho dinámico según dígitos
+            var digits = Math.Max(2, totalLines.ToString().Length);
+            var size9s = g.MeasureString(new string('9', digits), f);
+            int desiredWidth = (int)Math.Ceiling(size9s.Width) + 10;
+            if (lineNumberPanel.Width != desiredWidth)
+                lineNumberPanel.Width = desiredWidth;
+
+            // resalta línea actual (opcional)
+            int currentLine = txtEditor.GetLineFromCharIndex(txtEditor.SelectionStart);
+            int currentIdx = LineIndex(Math.Max(0, Math.Min(currentLine, totalLines - 1)));
+            var currPos = txtEditor.GetPositionFromCharIndex(Math.Max(0, currentIdx));
+            using var hl = new SolidBrush(Color.FromArgb(40, 120, 120, 160));
+            g.FillRectangle(hl, 0, currPos.Y, lineNumberPanel.Width, (int)f.GetHeight(g));
+
+            // números alineados a la derecha usando la Y real de cada línea
+            var fmt = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Near };
+            int h = lineNumberPanel.ClientSize.Height;
+
+            for (int line = firstLine; line < totalLines; line++)
             {
-                int yOffset = 0;
-                for (int i = firstLine; i <= lastLine; i++)
-                {
-                    e.Graphics.DrawString((i + 1).ToString(), font, brush, new PointF(5, yOffset));
-                    yOffset += 20;
-                }
+                int charIndex = LineIndex(line);
+                if (charIndex < 0) break;
+
+                var pos = txtEditor.GetPositionFromCharIndex(Math.Max(0, charIndex));
+                if (pos.Y > h) break;
+
+                g.DrawString((line + 1).ToString(), f, Brushes.Gainsboro,
+                             new RectangleF(0, pos.Y, lineNumberPanel.Width - 4, f.GetHeight(g)), fmt);
             }
         }
 
@@ -502,8 +466,65 @@ namespace IDE_COMPILADOR
 
         #endregion
 
+        #region Helpers de Hash Table (arriba y abajo)
+
+        // Construye el ListView con la tabla de símbolos
+        private ListView BuildSymbolList(IEnumerable<SymbolEntry> entries)
+        {
+            var list = new ListView
+            {
+                Dock = DockStyle.Fill,
+                View = View.Details,
+                FullRowSelect = true,
+                GridLines = true,
+                BackColor = Color.Black,
+                ForeColor = Color.White
+            };
+            list.Columns.Add("Nombre", 120);
+            list.Columns.Add("Tipo", 70);
+            list.Columns.Add("Valor", 100);
+            // Ámbito eliminado
+            list.Columns.Add("Offset", 70);
+            list.Columns.Add("Loc", 60);
+            list.Columns.Add("Líneas", 160);
+
+            foreach (var e2 in entries)
+            {
+                list.Items.Add(new ListViewItem(new[]
+                {
+                    e2.Name,
+                    e2.Type.ToSource(),
+                    e2.ValueAsString,
+                    e2.Offset.ToString(),
+                    e2.Loc.ToString(),
+                    string.Join(", ", e2.Lines)
+                }));
+            }
+            return list;
+        }
+
+        // Asegura/crea la pestaña "Hash Table" abajo en tabOutput
+        private TabPage EnsureBottomHashTab()
+        {
+            var page = tabOutput.TabPages.Cast<TabPage>()
+                .FirstOrDefault(tp => tp.Text.Equals("Hash Table", StringComparison.OrdinalIgnoreCase));
+            if (page == null)
+            {
+                page = new TabPage("Hash Table");
+                // lo insertamos antes de "Resultados" para que quede juntito
+                int idxResultados = tabOutput.TabPages.Cast<TabPage>()
+                    .Select((tp, i) => new { tp.Text, i })
+                    .FirstOrDefault(x => x.Text.Equals("Resultados", StringComparison.OrdinalIgnoreCase))?.i ?? tabOutput.TabPages.Count;
+                tabOutput.TabPages.Insert(idxResultados, page);
+            }
+            return page;
+        }
+
+        #endregion
+
         #region Lógica de Menú/Compilación
-        private RichTextBox GetOutputRichTextBox(string tabName)
+
+        private RichTextBox? GetOutputRichTextBox(string tabName)
         {
             foreach (TabPage pagina in tabOutput.TabPages)
                 if (pagina.Text.Equals(tabName, StringComparison.OrdinalIgnoreCase))
@@ -512,7 +533,6 @@ namespace IDE_COMPILADOR
                                  .FirstOrDefault();
             return null;
         }
-
 
         private void EjecutarFase(string fase)
         {
@@ -528,133 +548,211 @@ namespace IDE_COMPILADOR
                         var (tokens, errores) = analizador.Analizar(txtEditor.Text);
                         AplicarColoreado(tokens);
 
-                        // Mostramos errores en tabOutput como antes
                         foreach (TabPage pagina in tabOutput.TabPages)
                         {
                             if (pagina.Text.Equals(tabName, StringComparison.OrdinalIgnoreCase))
                             {
                                 if (pagina.Controls.Count > 0 && pagina.Controls[0] is RichTextBox rtb)
                                 {
-                                    if (errores.Count > 0)
-                                    {
-                                        rtb.Text = "Errores Léxicos Encontrados:\n\n" + string.Join(Environment.NewLine, errores);
-                                    }
-                                    else
-                                    {
-                                        rtb.Text = "Sin errores léxicos encontrados.";
-                                    }
+                                    rtb.Text = errores.Count > 0
+                                        ? "Errores Léxicos Encontrados:\n\n" + string.Join(Environment.NewLine, errores)
+                                        : "Sin errores léxicos encontrados.";
                                 }
                                 tabOutput.SelectedTab = pagina;
                                 break;
                             }
                         }
 
-                        // Mostramos los tokens válidos en la pestaña "?? Léxico"
-                        // 1) Filtramos los tokens para omitir los de tipo comentario
                         var tokensSinComentarios = tokens
                             .Where(t => t.Tipo != "ComentarioInline" && t.Tipo != "ComentarioExtenso")
                             .ToList();
 
-                        // 2) Mostramos sólo los tokens restantes en la pestaña Léxico
                         rtbLexico.Clear();
-                        rtbLexico.Text = string.Join(
-                            Environment.NewLine,
-                            tokensSinComentarios.Select(t => t.ToString())
-                        );
+                        rtbLexico.Text = string.Join(Environment.NewLine, tokensSinComentarios.Select(t => t.ToString()));
                         tabAnalysis.SelectedTab = tabLexico;
-
 
                         break;
                     }
-                // Dentro de EjecutarFase(), reemplaza el case "Syntax Analysis" por esto:
 
                 case "Syntax Analysis":
                     {
-                        // 1) Recalcular tokens
                         var lexico2 = new LexicalAnalyzer();
                         var (tokens2, lexErrors) = lexico2.Analizar(txtEditor.Text);
 
-                        // 2) Si hay errores léxicos, los mostramos y salimos
                         if (lexErrors.Count > 0)
                         {
                             var rtbLexErr = GetOutputRichTextBox("Errores Sintacticos");
-                            rtbLexErr.Text = "Antes de parsear, hay errores léxicos:\r\n" +
-                                             string.Join("\r\n", lexErrors);
-                            tabOutput.SelectedTab = tabOutput
-                                .TabPages
-                                .Cast<TabPage>()
-                                .First(tp => tp.Text == "Errores Sintacticos");
+                            if (rtbLexErr != null)
+                                rtbLexErr.Text = "Antes de parsear, hay errores léxicos:\r\n" + string.Join("\r\n", lexErrors);
+                            tabOutput.SelectedTab = tabOutput.TabPages.Cast<TabPage>().First(tp => tp.Text == "Errores Sintacticos");
                             break;
                         }
 
-                        // 3) Parsear
                         var parser = new SyntaxAnalyzer(tokens2);
                         ProgramNode ast = null;
-                        try
-                        {
-                            ast = parser.Parse();
-                        }
-                        catch (Exception)
-                        {
-                            parser.Errors.Add("Error interno al parsear.");
-                        }
+                        try { ast = parser.Parse(); }
+                        catch { parser.Errors.Add("Error interno al parsear."); }
 
-                        // 4) Mostrar errores o éxito
                         var rtbSynErr = GetOutputRichTextBox("Errores Sintacticos");
                         if (parser.Errors.Count > 0)
                         {
-                            // Hay errores sintácticos
-                            rtbSynErr.Text = "Errores Sintácticos Encontrados:\r\n" +
-                                             string.Join("\r\n", parser.Errors);
-                            tabOutput.SelectedTab = tabOutput
-                                .TabPages
-                                .Cast<TabPage>()
-                                .First(tp => tp.Text == "Errores Sintacticos");
+                            if (rtbSynErr != null)
+                                rtbSynErr.Text = "Errores Sintácticos Encontrados:\r\n" + string.Join("\r\n", parser.Errors);
+                            tabOutput.SelectedTab = tabOutput.TabPages.Cast<TabPage>().First(tp => tp.Text == "Errores Sintacticos");
                         }
                         else
                         {
-                            // ¡Éxito!
-                            rtbSynErr.Text = "Análisis sintáctico completado correctamente.\r\n" +
-                                             "No se encontraron errores de sintaxis.";
-                            tabOutput.SelectedTab = tabOutput
-                                .TabPages
-                                .Cast<TabPage>()
-                                .First(tp => tp.Text == "Errores Sintacticos");
+                            if (rtbSynErr != null)
+                                rtbSynErr.Text = "Análisis sintáctico completado correctamente.\r\nNo se encontraron errores de sintaxis.";
+                            tabOutput.SelectedTab = tabOutput.TabPages.Cast<TabPage>().First(tp => tp.Text == "Errores Sintacticos");
 
-                            // Además, mostrar el AST
                             treeViewSintactico.Nodes.Clear();
                             treeViewSintactico.Nodes.Add(BuildTree(ast));
-                            tabAnalysis.SelectedTab = tabSintactico;
                             treeViewSintactico.ExpandAll();
                             tabAnalysis.SelectedTab = tabSintactico;
                         }
                         break;
                     }
 
-
-
-
                 case "Semantic Analysis":
-                    tabName = "Errores Semanticos";
-                    MostrarMensajeTemporal(tabName, "Ejecutando análisis semántico...");
-                    break;
+                    {
+                        // 1) Léxico
+                        var lexico = new LexicalAnalyzer();
+                        var (tokens, lexErrs) = lexico.Analizar(txtEditor.Text);
+                        if (lexErrs.Count > 0)
+                        {
+                            var rtbSem = GetOutputRichTextBox("Errores Semanticos");
+                            if (rtbSem != null)
+                                rtbSem.Text = "Antes del análisis semántico, hay errores léxicos:\r\n" +
+                                              string.Join("\r\n", lexErrs);
+                            tabOutput.SelectedTab = tabOutput.TabPages.Cast<TabPage>().First(tp => tp.Text == "Errores Semanticos");
+                            break;
+                        }
+
+                        // 2) Sintaxis
+                        var parser = new SyntaxAnalyzer(tokens);
+                        ProgramNode ast = null;
+                        try { ast = parser.Parse(); }
+                        catch { parser.Errors.Add("Error interno al parsear."); }
+
+                        var rtbSem2 = GetOutputRichTextBox("Errores Semanticos");
+                        if (parser.Errors.Count > 0 || ast == null)
+                        {
+                            if (rtbSem2 != null)
+                                rtbSem2.Text = "Antes del análisis semántico, hay errores sintácticos:\r\n" +
+                                               string.Join("\r\n", parser.Errors);
+                            tabOutput.SelectedTab = tabOutput.TabPages.Cast<TabPage>().First(tp => tp.Text == "Errores Semanticos");
+                            break;
+                        }
+
+                        _lastAst = ast;
+
+                        // 3) Semántico - PASAR LOS TOKENS + fuente
+                        var sem = new IDE_COMPILADOR.AnalizadorSemantico.SemanticAnalyzer();
+                        sem.Analyze(_lastAst, tokens, txtEditor.Text);
+
+                        // 4) Errores semánticos
+                        if (rtbSem2 != null)
+                            rtbSem2.Text = sem.Errors.Count > 0
+                                ? "Errores semánticos:\r\n" + string.Join("\r\n", sem.Errors)
+                                : "Análisis semántico completado sin errores.";
+
+                        tabOutput.SelectedTab = tabOutput.TabPages.Cast<TabPage>().First(tp => tp.Text == "Errores Semanticos");
+
+                        // 5) Árbol anotado (en pestaña Semántico, arriba)
+                        var annotatedRoot = sem.BuildAnnotatedTree(_lastAst);
+                        var treeSem = new TreeView
+                        {
+                            Dock = DockStyle.Fill,
+                            BackColor = Color.Black,
+                            ForeColor = Color.White
+                        };
+                        treeSem.Nodes.Add(annotatedRoot);
+
+                        tabSemantico.Controls.Clear();
+                        tabSemantico.Controls.Add(treeSem);
+                        treeSem.ExpandAll();
+                        tabAnalysis.SelectedTab = tabSemantico;
+
+                        // 6) Tabla de símbolos (ARRIBA)
+                        tabHashTable.Controls.Clear();
+                        tabHashTable.Controls.Add(BuildSymbolList(sem.Symbols.AllEntries()));
+                        tabAnalysis.SelectedTab = tabHashTable;
+
+                        // 6bis) Misma tabla de símbolos ABAJO (tabOutput)
+                        var bottomHash = EnsureBottomHashTab();
+                        bottomHash.Controls.Clear();
+                        bottomHash.Controls.Add(BuildSymbolList(sem.Symbols.AllEntries()));
+                        tabOutput.SelectedTab = bottomHash;
+
+                        // 7) Exportación de entregables
+                        try
+                        {
+                            string outDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "SalidaSemantica");
+                            System.IO.Directory.CreateDirectory(outDir);
+
+                            // Tabla de símbolos
+                            var tablaPath = System.IO.Path.Combine(outDir, "tabla_simbolos.txt");
+                            var lineasTabla = new List<string>
+                            {
+                                "# Nombre\tTipo\tValor\tOffset\tLoc\tLineas"
+                            };
+                            foreach (var e2 in sem.Symbols.AllEntries())
+                            {
+                                lineasTabla.Add($"{e2.Name}\t{e2.Type.ToSource()}\t{e2.ValueAsString}\t{e2.Offset}\t{e2.Loc}\t[{string.Join(",", e2.Lines)}]");
+                            }
+                            System.IO.File.WriteAllLines(tablaPath, lineasTabla);
+
+                            // Errores semánticos
+                            var erroresPath = System.IO.Path.Combine(outDir, "errores_semanticos.txt");
+                            if (sem.Errors.Count > 0)
+                                System.IO.File.WriteAllLines(erroresPath, sem.Errors);
+                            else
+                                System.IO.File.WriteAllText(erroresPath, "Análisis semántico completado sin errores.");
+
+                            // AST anotado (texto)
+                            var anotadoPath = System.IO.Path.Combine(outDir, "ast_anotado.txt");
+                            using (var sw = new System.IO.StreamWriter(anotadoPath))
+                            {
+                                void Dump(TreeNode n, int depth)
+                                {
+                                    sw.WriteLine(new string(' ', depth * 2) + n.Text.Replace("\r", "").Replace("\n", " | "));
+                                    foreach (TreeNode ch in n.Nodes) Dump(ch, depth + 1);
+                                }
+                                Dump(annotatedRoot, 0);
+                            }
+                        }
+                        catch { /* no romper UI si falla IO */ }
+
+                        break;
+                    }
 
                 case "Intermediate Code":
-                    tabName = "Resultados";
-                    MostrarMensajeTemporal(tabName, "Generando código intermedio...");
-                    break;
+                    {
+                        tabName = "Resultados";
+                        MostrarMensajeTemporal(tabName, "Generando código intermedio...");
+                        break;
+                    }
 
                 case "Execution":
-                    tabName = "Resultados";
-                    MostrarMensajeTemporal(tabName, "Ejecutando programa...");
-                    break;
+                    {
+                        tabName = "Resultados";
+                        MostrarMensajeTemporal(tabName, "Ejecutando programa...");
+                        break;
+                    }
 
                 default:
-                    tabName = "Resultados";
-                    MostrarMensajeTemporal(tabName, $"Fase '{fase}' en ejecución...");
-                    break;
+                    {
+                        tabName = "Resultados";
+                        MostrarMensajeTemporal(tabName, $"Fase '{fase}' en ejecución...");
+                        break;
+                    }
             }
         }
+
+        #endregion
+
+        #region Árbol sintáctico base (para pestaña Sintáctico)
 
         private TreeNode BuildTree(ASTNode node)
         {
@@ -716,34 +814,28 @@ namespace IDE_COMPILADOR
                     return dwn;
 
                 case DoUntilNode du:
-                    // ------------------------------------------------
                     var duNode = new TreeNode("DoUntil");
-
-                    // 1) DoBody
                     var bodyDoNode = new TreeNode("DoBody");
                     foreach (var stmt in du.BodyDo)
                         bodyDoNode.Nodes.Add(BuildTree(stmt));
                     duNode.Nodes.Add(bodyDoNode);
 
-                    // 2) WhileCondition (la condición interna del “while” dentro del do)
                     var condWhileNode = new TreeNode("WhileCondition");
                     condWhileNode.Nodes.Add(BuildTree(du.ConditionWhile));
                     duNode.Nodes.Add(condWhileNode);
 
-                    // 3) WhileBody (el cuerpo del while interno)
                     var bodyWhileNode = new TreeNode("WhileBody");
                     foreach (var stmt2 in du.BodyWhile)
                         bodyWhileNode.Nodes.Add(BuildTree(stmt2));
                     duNode.Nodes.Add(bodyWhileNode);
 
-                    // 4) UntilCondition (la condición que cierra el do)
                     var condUntilNode = new TreeNode("UntilCondition");
                     condUntilNode.Nodes.Add(BuildTree(du.ConditionUntil));
                     duNode.Nodes.Add(condUntilNode);
 
                     return duNode;
+
                 case UnaryPostfixNode up:
-                    // Aquí reemplazas el código viejo por el snippet de arriba
                     var upNode = new TreeNode($"Postfix: {up.Identifier} {up.Operator}");
                     upNode.Nodes.Add(new TreeNode($"Id: {up.Identifier}"));
                     upNode.Nodes.Add(new TreeNode("Literal: 1"));
@@ -755,8 +847,8 @@ namespace IDE_COMPILADOR
                 case OutputNode outp:
                     var on = new TreeNode("Output");
                     on.Nodes.Add(new TreeNode(outp.Value is ExpressionNode
-                                             ? ((ExpressionNode)outp.Value).ToString()
-                                             : outp.Value.ToString()));
+                        ? ((ExpressionNode)outp.Value).ToString()
+                        : outp.Value.ToString()));
                     return on;
 
                 case BinaryOpNode b:
@@ -771,16 +863,21 @@ namespace IDE_COMPILADOR
                 case IdentifierNode idn:
                     return new TreeNode($"Id: {idn.Name}");
             }
+
             return new TreeNode(node.GetType().Name);
         }
+
+        #endregion
+
+        #region Utilidades varias
 
         private void AplicarColoreado(List<Token> tokens)
         {
             int originalSelectionStart = txtEditor.SelectionStart;
             int originalSelectionLength = txtEditor.SelectionLength;
 
-            txtEditor.TextChanged -= TxtEditor_TextChanged; // Evitar loops infinitos
-            txtEditor.SuspendLayout(); // Pausar redibujo
+            txtEditor.TextChanged -= TxtEditor_TextChanged;
+            txtEditor.SuspendLayout();
 
             txtEditor.SelectAll();
             txtEditor.SelectionColor = Color.White;
@@ -796,64 +893,49 @@ namespace IDE_COMPILADOR
                     {
                         case "Numero":
                         case "PuntoFlotante":
-                            txtEditor.SelectionColor = Color.LightGreen;
-                            break;
+                            txtEditor.SelectionColor = Color.LightGreen; break;
                         case "Identificador":
-                            txtEditor.SelectionColor = Color.Cyan;
-                            break;
+                            txtEditor.SelectionColor = Color.Cyan; break;
                         case "ComentarioInline":
                         case "ComentarioExtenso":
-                            txtEditor.SelectionColor = Color.Gray;
-                            break;
+                            txtEditor.SelectionColor = Color.Gray; break;
                         case "PalabraReservada":
-                            txtEditor.SelectionColor = Color.Orange;
-                            break;
+                            txtEditor.SelectionColor = Color.Orange; break;
                         case "OperadorAritmetico":
-                            txtEditor.SelectionColor = Color.Yellow;
-                            break;
+                            txtEditor.SelectionColor = Color.Yellow; break;
                         case "OperadorRelacional":
                         case "OperadorLogico":
                         case "Asignacion":
-                            txtEditor.SelectionColor = Color.Red;
-                            break;
+                            txtEditor.SelectionColor = Color.Red; break;
                     }
                 }
-                catch
-                {
-                    // Silenciar errores de selección fuera de rango
-                }
+                catch { /* fuera de rango: ignorar */ }
             }
 
-            // Restaurar selección y evento
             txtEditor.Select(originalSelectionStart, originalSelectionLength);
             txtEditor.SelectionColor = Color.White;
             txtEditor.ResumeLayout();
             txtEditor.TextChanged += TxtEditor_TextChanged;
         }
 
-
         private void MostrarMensajeTemporal(string tabName, string mensaje)
-    {
-        foreach (TabPage pagina in tabOutput.TabPages)
         {
-            if (pagina.Text.Equals(tabName, StringComparison.OrdinalIgnoreCase))
+            foreach (TabPage pagina in tabOutput.TabPages)
             {
-                if (pagina.Controls.Count > 0 && pagina.Controls[0] is RichTextBox rtb)
+                if (pagina.Text.Equals(tabName, StringComparison.OrdinalIgnoreCase))
                 {
-                    rtb.Text = mensaje;
+                    if (pagina.Controls.Count > 0 && pagina.Controls[0] is RichTextBox rtb)
+                        rtb.Text = mensaje;
+                    tabOutput.SelectedTab = pagina;
+                    break;
                 }
-                tabOutput.SelectedTab = pagina;
-                break;
             }
         }
-    }
-
 
         #endregion
 
         #region Abrir/Guardar Archivos
 
-        // ??? 1) OpenFile: cargar y colorear TODO ?????????????????????????????????????
         private void OpenFile()
         {
             using (OpenFileDialog dlg = new OpenFileDialog())
@@ -869,7 +951,6 @@ namespace IDE_COMPILADOR
                 AplicarColoreadoCompleto(tokens);
             }
         }
-
 
         private void SaveFile()
         {
@@ -896,7 +977,7 @@ namespace IDE_COMPILADOR
 
         #region Explorador de Archivos
 
-        private void BtnAgregarArchivo_Click(object sender, EventArgs e)
+        private void BtnAgregarArchivo_Click(object? sender, EventArgs e)
         {
             using (OpenFileDialog openFileDialog = new OpenFileDialog())
             {
@@ -907,22 +988,14 @@ namespace IDE_COMPILADOR
                     if (!FileNodeExists(filePath))
                     {
                         string extension = Path.GetExtension(filePath).ToLower();
-                        string iconKey = "default"; // Icono por defecto
+                        string iconKey = "default";
 
                         switch (extension)
                         {
-                            case ".php":
-                                iconKey = "php";
-                                break;
-                            case ".html":
-                                iconKey = "html";
-                                break;
-                            case ".java":
-                                iconKey = "java";
-                                break;
-                            case ".cs":
-                                iconKey = "cs";
-                                break;
+                            case ".php": iconKey = "php"; break;
+                            case ".html": iconKey = "html"; break;
+                            case ".java": iconKey = "java"; break;
+                            case ".cs": iconKey = "cs"; break;
                         }
 
                         TreeNode node = new TreeNode(Path.GetFileName(filePath))
@@ -938,7 +1011,6 @@ namespace IDE_COMPILADOR
             }
         }
 
-
         private bool FileNodeExists(string filePath)
         {
             foreach (TreeNode node in fileExplorer.Nodes)
@@ -949,13 +1021,15 @@ namespace IDE_COMPILADOR
             return false;
         }
 
-        private void BtnEliminarArchivo_Click(object sender, EventArgs e)
+        private void BtnEliminarArchivo_Click(object? sender, EventArgs e)
         {
             TreeNode selectedNode = fileExplorer.SelectedNode;
             if (selectedNode != null)
             {
-                DialogResult result = MessageBox.Show("¿Estás seguro de que deseas eliminar este archivo del explorador?",
-                                                      "Confirmar eliminación", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                DialogResult result = MessageBox.Show(
+                    "¿Estás seguro de que deseas eliminar este archivo del explorador?",
+                    "Confirmar eliminación", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
                 if (result == DialogResult.Yes)
                 {
                     string filePathToDelete = selectedNode.Tag as string;
@@ -969,13 +1043,12 @@ namespace IDE_COMPILADOR
             }
             else
             {
-                MessageBox.Show("Por favor, selecciona un archivo para eliminar.", "Eliminar Archivo",
-                                MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("Por favor, selecciona un archivo para eliminar.",
+                                "Eliminar Archivo", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
 
-        // ??? 2) Double-click en el TreeView: cargar y colorear TODO ????????????????
-        private void FileExplorer_NodeMouseDoubleClick(object sender, TreeNodeMouseClickEventArgs e)
+        private void FileExplorer_NodeMouseDoubleClick(object? sender, TreeNodeMouseClickEventArgs e)
         {
             if (e.Node.Tag == null) return;
 
@@ -993,7 +1066,6 @@ namespace IDE_COMPILADOR
             var (tokens, _) = analizador.Analizar(txtEditor.Text);
             AplicarColoreadoCompleto(tokens);
         }
-
 
         #endregion
     }
