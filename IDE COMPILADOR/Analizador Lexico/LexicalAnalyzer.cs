@@ -1,5 +1,4 @@
-﻿// File: LexicalAnalyzer.cs
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 
@@ -17,7 +16,6 @@ namespace IDE_COMPILADOR.AnalizadorLexico
             "false","until",
         };
 
-        /// Analiza la cadena de entrada y devuelve la lista de tokens y errores.
         public (List<Token> tokens, List<string> errores) Analizar(string entrada)
         {
             _tokens.Clear();
@@ -27,7 +25,6 @@ namespace IDE_COMPILADOR.AnalizadorLexico
 
             while (pos < entrada.Length)
             {
-                // 1) Saltar espacios y nueva línea
                 char c = entrada[pos];
                 if (char.IsWhiteSpace(c))
                 {
@@ -44,7 +41,6 @@ namespace IDE_COMPILADOR.AnalizadorLexico
                     continue;
                 }
 
-                // 2) Reconocimiento con DFA (maximal munch)
                 var sb = new StringBuilder();
                 int startCol = columna;
                 var state = DFA.State.START;
@@ -67,29 +63,25 @@ namespace IDE_COMPILADOR.AnalizadorLexico
                     }
                     iter++;
                 }
-                // Detectar punto decimal sin dígito (estado DECIMAL_POINT)
+
+                // Detectar punto decimal sin dígito
                 if (state == DFA.State.DECIMAL_POINT)
                 {
-                    // "malFormado" contendrá por ejemplo "32."
                     string malFormado = sb.ToString();
                     _errores.Add(
                         $"Error léxico: número mal formado '{malFormado}' en línea {linea}, columna {startCol}"
                     );
-                    // Avanzamos para saltarnos el punto mal formado
                     pos += malFormado.Length;
                     columna += malFormado.Length;
                     continue;
                 }
 
-
                 if (lastAcceptPos >= pos)
                 {
-                    // Extraer lexema válido
                     string lexema = sb.ToString(0, lastAcceptPos - pos + 1);
                     string tipo = ClasificarToken(lastAccept, lexema);
                     _tokens.Add(new Token(tipo, lexema, linea, startCol));
 
-                    // Avanzar posición y actualizar línea/columna
                     for (int k = pos; k <= lastAcceptPos; k++)
                     {
                         if (entrada[k] == '\n')
@@ -106,7 +98,6 @@ namespace IDE_COMPILADOR.AnalizadorLexico
                 }
                 else
                 {
-                    // Símbolo inesperado
                     _errores.Add($"Error léxico: símbolo '{entrada[pos]}' en línea {linea}, columna {columna}");
                     pos++;
                     columna++;
@@ -124,31 +115,22 @@ namespace IDE_COMPILADOR.AnalizadorLexico
                     _palabrasReservadas.Contains(lexema) ? "PalabraReservada" : "Identificador",
                 DFA.State.NUMBER => "Numero",
                 DFA.State.FLOAT => "PuntoFlotante",
-
-                // ++ y -- como aritméticos
                 DFA.State.PLUSPLUS => "OperadorAritmetico",
                 DFA.State.MINUSMINUS => "OperadorAritmetico",
-
-                // + y - simples
                 DFA.State.PLUS => "OperadorAritmetico",
                 DFA.State.MINUS => "OperadorAritmetico",
-
                 DFA.State.MULTIPLY => "OperadorAritmetico",
                 DFA.State.MODULUS => "OperadorAritmetico",
                 DFA.State.POWER => "OperadorAritmetico",
                 DFA.State.SLASH => "OperadorAritmetico",
-
                 DFA.State.RELATIONAL
                 or DFA.State.LOGICAL
                 or DFA.State.ASSIGN => "OperadorLogico",
-
                 DFA.State.SYMBOL => "Simbolo",
                 DFA.State.COMMENT_LINE => "ComentarioInline",
                 DFA.State.COMMENT_BLOCK_END => "ComentarioExtenso",
-
                 _ => "Desconocido"
             };
         }
-
     }
 }

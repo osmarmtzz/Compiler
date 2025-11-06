@@ -10,7 +10,7 @@ namespace IDE_COMPILADOR.AnalizadorLexico
             START,
             IDENTIFIER,
             NUMBER,
-            DECIMAL_POINT,    // tras el punto, antes de dígito
+            DECIMAL_POINT,
             FLOAT,
             PLUS,
             PLUSPLUS,
@@ -55,7 +55,7 @@ namespace IDE_COMPILADOR.AnalizadorLexico
             AddTransition(State.START, ch => char.IsLetter(ch), State.IDENTIFIER);
             AddTransition(State.IDENTIFIER, ch => char.IsLetterOrDigit(ch), State.IDENTIFIER);
 
-            // 3) Números enteros y reales
+            // 3) Números enteros y reales - CORREGIDO
             AddTransition(State.START, ch => char.IsDigit(ch), State.NUMBER);
             AddTransition(State.NUMBER, ch => char.IsDigit(ch), State.NUMBER);
             AddTransition(State.NUMBER, ch => ch == '.', State.DECIMAL_POINT);

@@ -317,7 +317,7 @@ namespace IDE_COMPILADOR.AnalizadorSintactico
             return ParseDoUntil();
         }
 
- 
+
         private DoUntilNode ParseDoUntil()
         {
             // 1) Recolectar las sentencias del bloque "do" (hasta 'while' interno)

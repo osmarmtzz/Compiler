@@ -9,20 +9,46 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
     {
         public string Name { get; set; } = string.Empty;
         public DataType Type { get; set; } = DataType.Unknown;
-        public object? Value { get; set; } = null;   // int, double, bool o null
-        public int Loc { get; set; }                 // número de registro
-        public int Offset { get; set; } = 0;         // dirección o desplazamiento
+        public object? Value { get; set; } = null;
+        public int Loc { get; set; }
+        public int Offset { get; set; } = 0;
         public List<int> Lines { get; } = new List<int>();
 
+        // Aún tenemos una representación por defecto,
+        // pero la UI usará su propio formateador.
         public string ValueAsString
         {
             get
             {
                 if (Value == null) return "sin valor";
-                if (Value is bool b) return b ? "true" : "false";
-                if (Value is int i) return i.ToString();
-                if (Value is double d) return d.ToString(CultureInfo.InvariantCulture);
-                return Value?.ToString() ?? "sin valor";
+
+                if (Type == DataType.Float)
+                {
+                    if (Value is double dd) return dd.ToString("0.00", CultureInfo.InvariantCulture);
+                    if (Value is float ff) return ((double)ff).ToString("0.00", CultureInfo.InvariantCulture);
+                    if (Value is int ii) return ((double)ii).ToString("0.00", CultureInfo.InvariantCulture);
+                    try { return Convert.ToDouble(Value, CultureInfo.InvariantCulture).ToString("0.00", CultureInfo.InvariantCulture); }
+                    catch { return Value.ToString() ?? "sin valor"; }
+                }
+
+                if (Type == DataType.Int)
+                {
+                    if (Value is int i) return i.ToString(CultureInfo.InvariantCulture);
+                    if (Value is double d) return ((int)d).ToString(CultureInfo.InvariantCulture);
+                    if (Value is float f) return ((int)f).ToString(CultureInfo.InvariantCulture);
+                    try { return Convert.ToInt32(Value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture); }
+                    catch { return Value.ToString() ?? "sin valor"; }
+                }
+
+                if (Type == DataType.Bool)
+                {
+                    if (Value is bool b) return b.ToString().ToLower();
+                    try { return Convert.ToBoolean(Value, CultureInfo.InvariantCulture).ToString().ToLower(); }
+                    catch { return Value.ToString() ?? "sin valor"; }
+                }
+
+                if (Value is double d2) return d2.ToString("0.00", CultureInfo.InvariantCulture);
+                return Value.ToString() ?? "sin valor";
             }
         }
     }
@@ -65,10 +91,9 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
             if (_stack.Count > 0) _stack.Pop();
         }
 
-        /// <summary>Declara una nueva variable en el ámbito actual.</summary>
         public bool TryDeclare(string name, DataType type, int line, out SymbolEntry entry, out string? error)
         {
-            error = null;
+            error = null!;
             entry = null!;
 
             if (_stack.Count == 0)
@@ -79,8 +104,6 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
             if (current.Symbols.ContainsKey(name))
             {
                 entry = current.Symbols[name];
-                if (line > 0 && !entry.Lines.Contains(line))
-                    entry.Lines.Add(line);
                 error = $"Error línea {line}: Variable '{name}' redeclarada.";
                 return false;
             }
@@ -100,11 +123,9 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
 
             current.Symbols[name] = entry;
             _allEntries.Add(entry);
-
             return true;
         }
 
-        /// <summary>Busca una variable declarada (del scope actual hacia atrás).</summary>
         public SymbolEntry? Lookup(string name)
         {
             foreach (var frame in _stack)
@@ -113,7 +134,6 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
             return null;
         }
 
-        /// <summary>Marca el uso de una variable (existe o error).</summary>
         public bool TryUse(string name, int line, out string error)
         {
             error = string.Empty;
@@ -123,12 +143,9 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
                 error = $"Error línea {line}: Variable '{name}' no declarada.";
                 return false;
             }
-            if (line > 0 && !sym.Lines.Contains(line))
-                sym.Lines.Add(line);
             return true;
         }
 
-        /// <summary>Asigna valor y tipo a una variable declarada, validando compatibilidad.</summary>
         public bool TryAssign(string name, object? value, DataType valueType, int line, out string? error)
         {
             error = null;
@@ -141,49 +158,60 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
 
             if (!TypeUtils.CanAssign(sym.Type, valueType, out var isNarrowing))
             {
-                if (isNarrowing)
-                    error = $"Error línea {line}: Conversión no válida (float → int) en '{name}'.";
-                else
-                    error = $"Error línea {line}: Tipos incompatibles al asignar a '{name}'.";
+                error = isNarrowing
+                    ? $"Error línea {line}: Conversión no válida (float → int) en '{name}'."
+                    : $"Error línea {line}: Tipos incompatibles al asignar a '{name}'.";
                 return false;
             }
 
+            // Normaliza el valor al tipo declarado del símbolo
             if (value == null)
             {
                 sym.Value = null;
-            }
-            else if (sym.Type == DataType.Float)
-            {
-                sym.Value = value is int iv ? (double)iv : value;
-            }
-            else if (sym.Type == DataType.Int)
-            {
-                sym.Value = value is double dv ? (int)dv : value;
-            }
-            else
-            {
-                sym.Value = value;
+                return true;
             }
 
-            if (line > 0 && !sym.Lines.Contains(line))
-                sym.Lines.Add(line);
+            try
+            {
+                switch (sym.Type)
+                {
+                    case DataType.Float:
+                        if (value is double d) sym.Value = d;
+                        else if (value is int i) sym.Value = (double)i;
+                        else if (value is float f) sym.Value = (double)f;
+                        else sym.Value = Convert.ToDouble(value, CultureInfo.InvariantCulture);
+                        break;
+
+                    case DataType.Int:
+                        if (value is int ii) sym.Value = ii;
+                        else if (value is double dd) sym.Value = (int)dd;
+                        else if (value is float ff) sym.Value = (int)ff;
+                        else sym.Value = Convert.ToInt32(value, CultureInfo.InvariantCulture);
+                        break;
+
+                    case DataType.Bool:
+                        if (value is bool bb) sym.Value = bb;
+                        else sym.Value = Convert.ToBoolean(value, CultureInfo.InvariantCulture);
+                        break;
+
+                    default:
+                        sym.Value = value;
+                        break;
+                }
+            }
+            catch
+            {
+                sym.Value = value; // si algo falla, deja el crudo
+            }
 
             return true;
         }
 
-        /// <summary>
-        /// Crea (si no existe) un símbolo con tipo desconocido para que aparezca en la tabla
-        /// y se acumulen sus líneas de uso.
-        /// </summary>
         public SymbolEntry EnsurePlaceholderUnknown(string name, int line)
         {
             var sym = Lookup(name);
             if (sym != null)
-            {
-                if (line > 0 && !sym.Lines.Contains(line))
-                    sym.Lines.Add(line);
                 return sym;
-            }
 
             if (_stack.Count == 0)
                 EnterScope("global");
@@ -197,14 +225,11 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
                 Offset = current.NextOffset
             };
 
-            if (line > 0) sym.Lines.Add(line);
-
             current.Symbols[name] = sym;
             _allEntries.Add(sym);
             return sym;
         }
 
-        /// <summary>Devuelve únicamente variables declaradas (Type != Unknown), ordenadas por Loc.</summary>
         public IEnumerable<SymbolEntry> AllEntries()
         {
             return _allEntries

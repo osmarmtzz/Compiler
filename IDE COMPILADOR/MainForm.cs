@@ -1,11 +1,11 @@
-﻿
-using System;
+﻿using System;
 using System.IO;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Linq;
 using System.Collections.Generic; // List<T>, LINQ
 using System.Runtime.InteropServices;             // <- Win32 helpers
+using System.Globalization;                       // <<< NECESARIO
 using IDE_COMPILADOR.AnalizadorLexico;
 using IDE_COMPILADOR.AnalizadorSintactico;
 using IDE_COMPILADOR.AnalizadorSintactico.AST;
@@ -434,6 +434,7 @@ namespace IDE_COMPILADOR
             // resalta línea actual (opcional)
             int currentLine = txtEditor.GetLineFromCharIndex(txtEditor.SelectionStart);
             int currentIdx = LineIndex(Math.Max(0, Math.Min(currentLine, totalLines - 1)));
+
             var currPos = txtEditor.GetPositionFromCharIndex(Math.Max(0, currentIdx));
             using var hl = new SolidBrush(Color.FromArgb(40, 120, 120, 160));
             g.FillRectangle(hl, 0, currPos.Y, lineNumberPanel.Width, (int)f.GetHeight(g));
@@ -468,6 +469,47 @@ namespace IDE_COMPILADOR
 
         #region Helpers de Hash Table (arriba y abajo)
 
+        // ---- Formateador único para grilla y exportación ----
+        private static string FormatValueForGrid(SymbolEntry e)
+        {
+            if (e.Value == null) return "sin valor";
+
+            static double AsDouble(object v)
+            {
+                if (v is double dd) return dd;
+                if (v is int ii) return ii;
+                if (v is float ff) return ff;
+                return double.Parse(Convert.ToString(v, CultureInfo.InvariantCulture) ?? "0",
+                                    NumberStyles.Any, CultureInfo.InvariantCulture);
+            }
+
+            static int AsInt(object v)
+            {
+                if (v is int ii) return ii;
+                if (v is double dd) return (int)dd;
+                if (v is float ff) return (int)ff;
+                return int.Parse(Convert.ToString(v, CultureInfo.InvariantCulture) ?? "0",
+                                 NumberStyles.Integer, CultureInfo.InvariantCulture);
+            }
+
+            switch (e.Type)
+            {
+                case IDE_COMPILADOR.AnalizadorSemantico.DataType.Float:
+                    return AsDouble(e.Value).ToString("0.00", CultureInfo.InvariantCulture);
+
+                case IDE_COMPILADOR.AnalizadorSemantico.DataType.Int:
+                    return AsInt(e.Value).ToString(CultureInfo.InvariantCulture);
+
+                case IDE_COMPILADOR.AnalizadorSemantico.DataType.Bool:
+                    return ((e.Value is bool b) ? b : Convert.ToBoolean(e.Value))
+                           .ToString().ToLower();
+
+                default:
+                    if (e.Value is double d) return d.ToString("0.00", CultureInfo.InvariantCulture);
+                    return e.Value.ToString() ?? "sin valor";
+            }
+        }
+
         // Construye el ListView con la tabla de símbolos
         private ListView BuildSymbolList(IEnumerable<SymbolEntry> entries)
         {
@@ -483,18 +525,19 @@ namespace IDE_COMPILADOR
             list.Columns.Add("Nombre", 120);
             list.Columns.Add("Tipo", 70);
             list.Columns.Add("Valor", 100);
-            // Ámbito eliminado
             list.Columns.Add("Offset", 70);
             list.Columns.Add("Loc", 60);
             list.Columns.Add("Líneas", 160);
 
             foreach (var e2 in entries)
             {
+                var valor = FormatValueForGrid(e2);  // <-- aquí el formateo consistente
+
                 list.Items.Add(new ListViewItem(new[]
                 {
                     e2.Name,
                     e2.Type.ToSource(),
-                    e2.ValueAsString,
+                    valor,
                     e2.Offset.ToString(),
                     e2.Loc.ToString(),
                     string.Join(", ", e2.Lines)
@@ -511,7 +554,6 @@ namespace IDE_COMPILADOR
             if (page == null)
             {
                 page = new TabPage("Hash Table");
-                // lo insertamos antes de "Resultados" para que quede juntito
                 int idxResultados = tabOutput.TabPages.Cast<TabPage>()
                     .Select((tp, i) => new { tp.Text, i })
                     .FirstOrDefault(x => x.Text.Equals("Resultados", StringComparison.OrdinalIgnoreCase))?.i ?? tabOutput.TabPages.Count;
@@ -649,7 +691,7 @@ namespace IDE_COMPILADOR
 
                         // 3) Semántico - PASAR LOS TOKENS + fuente
                         var sem = new IDE_COMPILADOR.AnalizadorSemantico.SemanticAnalyzer();
-                        sem.Analyze(_lastAst, tokens, txtEditor.Text);
+                        sem.Analyze(_lastAst, tokens, txtEditor.Text);  // CRÍTICO
 
                         // 4) Errores semánticos
                         if (rtbSem2 != null)
@@ -685,13 +727,13 @@ namespace IDE_COMPILADOR
                         bottomHash.Controls.Add(BuildSymbolList(sem.Symbols.AllEntries()));
                         tabOutput.SelectedTab = bottomHash;
 
-                        // 7) Exportación de entregables
+                        // 7) Exportación de entregables (usando el MISMO formateador)
                         try
                         {
                             string outDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "SalidaSemantica");
                             System.IO.Directory.CreateDirectory(outDir);
 
-                            // Tabla de símbolos
+                            // Tabla de símbolos (formateo consistente)
                             var tablaPath = System.IO.Path.Combine(outDir, "tabla_simbolos.txt");
                             var lineasTabla = new List<string>
                             {
@@ -699,7 +741,8 @@ namespace IDE_COMPILADOR
                             };
                             foreach (var e2 in sem.Symbols.AllEntries())
                             {
-                                lineasTabla.Add($"{e2.Name}\t{e2.Type.ToSource()}\t{e2.ValueAsString}\t{e2.Offset}\t{e2.Loc}\t[{string.Join(",", e2.Lines)}]");
+                                var valor = FormatValueForGrid(e2);
+                                lineasTabla.Add($"{e2.Name}\t{e2.Type.ToSource()}\t{valor}\t{e2.Offset}\t{e2.Loc}\t[{string.Join(",", e2.Lines)}]");
                             }
                             System.IO.File.WriteAllLines(tablaPath, lineasTabla);
 

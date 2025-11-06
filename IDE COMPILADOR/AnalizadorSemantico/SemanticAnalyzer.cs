@@ -22,34 +22,24 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
         public readonly List<string> Errors = new List<string>();
         public readonly Dictionary<ASTNode, SemanticInfo> Annotations = new Dictionary<ASTNode, SemanticInfo>();
 
-        // Mapa opcional (no es la fuente de verdad principal)
-        private Dictionary<string, List<int>> _identifierLines = new Dictionary<string, List<int>>();
-
-        // Fuente de verdad #1: todos los tokens
+        private readonly Dictionary<string, Queue<int>> _lineQueueByIdentifier = new Dictionary<string, Queue<int>>();
         private List<Token> _allTokens = new List<Token>();
-
-        // Fuente de verdad #2 (fallback): texto fuente
         private string _sourceText = string.Empty;
 
-        /// <summary>
-        /// Analiza el programa con info de líneas desde tokens y/o texto fuente.
-        /// </summary>
-        public void Analyze(ProgramNode program, List<Token> tokens = null, string sourceText = null)
+        public void Analyze(ProgramNode program, List<Token>? tokens = null, string? sourceText = null)
         {
             Errors.Clear();
             Annotations.Clear();
             Symbols.Reset();
-            _identifierLines.Clear();
 
+            _lineQueueByIdentifier.Clear();
             _allTokens = tokens ?? new List<Token>();
             _sourceText = sourceText ?? string.Empty;
 
-            if (tokens != null)
-                BuildIdentifierLineMap(tokens);
-
+            BuildLineQueues();
             Symbols.EnterScope("global");
 
-            // 1) Declaraciones globales
+            // Declaraciones
             foreach (var decl in program.Declarations)
             {
                 if (decl is VariableDeclarationNode vd)
@@ -57,7 +47,7 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
                     var t = TypeUtils.FromString(vd.TypeName);
                     foreach (var id in vd.Identifiers)
                     {
-                        int line = GetFirstLine(id);
+                        int line = ConsumeNextLine(id);
                         if (!Symbols.TryDeclare(id, t, line, out _, out string err) && err != null)
                             Errors.Add(err);
                     }
@@ -65,7 +55,7 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
                 }
             }
 
-            // 2) Cuerpos
+            // Bloques con statements
             int blockIndex = 1;
             foreach (var decl in program.Declarations)
             {
@@ -81,101 +71,82 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
 
             Symbols.ExitScope();
 
-            // Desduplicar conservando orden
+            // Deduplicación de errores
             var dedup = Errors.Distinct().ToList();
             Errors.Clear();
             Errors.AddRange(dedup);
         }
 
-        private void BuildIdentifierLineMap(List<Token> tokens)
+        // ---------- Utilidades de líneas ----------
+        private void BuildLineQueues()
         {
-            foreach (var token in tokens)
-            {
-                var tipo = token.Tipo?.Trim();
-                bool esIdent =
-                    !string.IsNullOrEmpty(tipo) &&
-                    (tipo.Equals("Identificador", StringComparison.OrdinalIgnoreCase)
-                     || tipo.Equals("ID", StringComparison.OrdinalIgnoreCase)
-                     || tipo.Equals("Ident", StringComparison.OrdinalIgnoreCase)
-                     || tipo.IndexOf("ident", StringComparison.OrdinalIgnoreCase) >= 0);
+            _lineQueueByIdentifier.Clear();
 
-                if (esIdent)
-                {
-                    string nombre = token.Valor;
-                    if (!_identifierLines.ContainsKey(nombre))
-                        _identifierLines[nombre] = new List<int>();
-
-                    if (token.Linea > 0 && !_identifierLines[nombre].Contains(token.Linea))
-                        _identifierLines[nombre].Add(token.Linea);
-                }
-            }
-        }
-
-        // ===== Líneas: tokens + fallback a texto =====
-
-        private List<int> GetAllLines(string identifier)
-        {
-            var result = new List<int>();
-            if (string.IsNullOrWhiteSpace(identifier))
-                return result;
-
-            // 1) Buscar en TODOS los tokens por Valor (case-insensitive)
-            if (_allTokens != null && _allTokens.Count > 0)
-            {
-                result = _allTokens
-                    .Where(t => t != null && !string.IsNullOrEmpty(t.Valor)
-                             && string.Equals(t.Valor, identifier, StringComparison.OrdinalIgnoreCase))
-                    .Select(t => t.Linea)
-                    .Where(l => l > 0)
-                    .Distinct()
-                    .OrderBy(l => l)
-                    .ToList();
-            }
-
-            if (result.Count > 0)
-                return result;
-
-            // 2) Fallback: buscar en el texto fuente por palabra completa
             if (!string.IsNullOrEmpty(_sourceText))
             {
-                var pattern = $@"\b{Regex.Escape(identifier)}\b";
-                var rgx = new Regex(pattern, RegexOptions.IgnoreCase);
-
                 var lines = _sourceText.Replace("\r\n", "\n").Split('\n');
-                for (int i = 0; i < lines.Length; i++)
+
+                var identifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var token in _allTokens)
                 {
-                    if (rgx.IsMatch(lines[i]))
-                        result.Add(i + 1); // 1-based
+                    if (token != null &&
+                        string.Equals(token.Tipo, "Identificador", StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(token.Valor))
+                    {
+                        identifiers.Add(token.Valor);
+                    }
                 }
 
-                result = result.Distinct().OrderBy(l => l).ToList();
+                foreach (var id in identifiers)
+                {
+                    var linesList = new List<int>();
+                    var pattern = $@"\b{Regex.Escape(id)}\b";
+                    var rgx = new Regex(pattern, RegexOptions.IgnoreCase);
+
+                    for (int i = 0; i < lines.Length; i++)
+                    {
+                        var matches = rgx.Matches(lines[i]);
+                        for (int k = 0; k < matches.Count; k++)
+                            linesList.Add(i + 1);
+                    }
+
+                    if (linesList.Count > 0)
+                        _lineQueueByIdentifier[id] = new Queue<int>(linesList);
+                }
             }
+            else
+            {
+                var tokensByIdentifier = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+                foreach (var t in _allTokens)
+                {
+                    if (t != null &&
+                        t.Linea > 0 &&
+                        string.Equals(t.Tipo, "Identificador", StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(t.Valor))
+                    {
+                        if (!tokensByIdentifier.ContainsKey(t.Valor))
+                            tokensByIdentifier[t.Valor] = new List<int>();
+                        tokensByIdentifier[t.Valor].Add(t.Linea);
+                    }
+                }
 
-            return result;
+                foreach (var kvp in tokensByIdentifier)
+                    _lineQueueByIdentifier[kvp.Key] = new Queue<int>(kvp.Value);
+            }
         }
 
-        private int GetFirstLine(string identifier)
+        private int ConsumeNextLine(string identifier)
         {
-            var lines = GetAllLines(identifier);
-            return (lines.Count > 0) ? lines[0] : -1;
+            if (!_lineQueueByIdentifier.TryGetValue(identifier, out var queue)) return -1;
+            if (queue.Count == 0) return -1;
+            return queue.Dequeue();
         }
 
-        private int GetNextLine(string identifier)
+        private void RegisterLine(string identifier, int line)
         {
+            if (line <= 0) return;
             var sym = Symbols.Lookup(identifier);
-            var lines = GetAllLines(identifier);
-
-            if (lines.Count == 0)
-                return -1;
-
-            if (sym == null || sym.Lines.Count == 0)
-                return lines[0];
-
-            foreach (var l in lines)
-                if (!sym.Lines.Contains(l))
-                    return l;
-
-            return lines[0];
+            if (sym != null) sym.Lines.Add(line);
         }
 
         private void WithScope(string name, Action action)
@@ -185,32 +156,34 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
             finally { Symbols.ExitScope(); }
         }
 
+        // ---------- Análisis de statements ----------
         private void AnalyzeStmt(StatementNode st)
         {
+            // ASIGNACIÓN
             if (st is AssignmentNode a)
             {
                 var rhs = AnalyzeExpr(a.Expression);
-                int line = GetNextLine(a.Identifier);
-
-                // Asegurar placeholder para que salga en Hash Table
-                if (Symbols.Lookup(a.Identifier) == null)
-                    Symbols.EnsurePlaceholderUnknown(a.Identifier, line);
+                int lhsLine = ConsumeNextLine(a.Identifier);
+                var sym = Symbols.Lookup(a.Identifier) ?? Symbols.EnsurePlaceholderUnknown(a.Identifier, -1);
+                RegisterLine(a.Identifier, lhsLine);
 
                 if (rhs.Type == DataType.Unknown)
                 {
-                    Errors.Add(line > 0
-                        ? $"Error línea {line}: Tipo desconocido en asignación a '{a.Identifier}'."
+                    Errors.Add(lhsLine > 0
+                        ? $"Error línea {lhsLine}: Tipo desconocido en asignación a '{a.Identifier}'."
                         : $"Tipo desconocido en asignación a '{a.Identifier}'.");
                 }
                 else
                 {
-                    if (!Symbols.TryAssign(a.Identifier, rhs.ConstValue, rhs.Type, line, out string err) && err != null)
-                        Errors.Add(err);
+                    if (!Symbols.TryAssign(a.Identifier, rhs.ConstValue, rhs.Type, lhsLine, out var assignErr) && assignErr != null)
+                        Errors.Add(assignErr);
                 }
+
                 Annotate(a, rhs.Type, rhs.ConstValue);
                 return;
             }
 
+            // IF
             if (st is IfNode iff)
             {
                 var c = AnalyzeExpr(iff.Condition);
@@ -234,6 +207,7 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
                 return;
             }
 
+            // WHILE
             if (st is WhileNode w)
             {
                 var c = AnalyzeExpr(w.Condition);
@@ -249,6 +223,7 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
                 return;
             }
 
+            // DO-WHILE
             if (st is DoWhileNode dw)
             {
                 WithScope($"do-body", () =>
@@ -264,6 +239,7 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
                 return;
             }
 
+            // DO-UNTIL (con while intermedio)
             if (st is DoUntilNode du)
             {
                 WithScope($"do-body", () =>
@@ -288,55 +264,76 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
                 return;
             }
 
+            // POSTFIJOS (x++, x--)  ⟶ lectura y escritura en la MISMA línea
             if (st is UnaryPostfixNode up)
             {
-                int line = GetNextLine(up.Identifier);
-                var sym = Symbols.Lookup(up.Identifier);
-                if (sym == null)
-                {
-                    Symbols.EnsurePlaceholderUnknown(up.Identifier, line);
-                    Errors.Add(line > 0
-                        ? $"Error línea {line}: Variable '{up.Identifier}' no declarada (uso en {up.Operator})."
-                        : $"Variable '{up.Identifier}' no declarada (uso en {up.Operator}).");
-                    Annotate(up, DataType.Unknown, null);
-                    return;
-                }
+                // 1) toma la línea textual del identificador (p.ej., 26 para "c--;")
+                int line = ConsumeNextLine(up.Identifier);
+
+                // 2) asegura el símbolo
+                var sym = Symbols.Lookup(up.Identifier) ?? Symbols.EnsurePlaceholderUnknown(up.Identifier, -1);
+
+                // 3) valida tipos/valor pero SIN salir antes de registrar las líneas
                 if (!sym.Type.IsNumeric())
                 {
                     Errors.Add(line > 0
                         ? $"Error línea {line}: Operador '{up.Operator}' solo aplica a tipos numéricos (variable '{up.Identifier}' es {sym.Type.ToSource()})."
                         : $"Operador '{up.Operator}' solo aplica a tipos numéricos (variable '{up.Identifier}' es {sym.Type.ToSource()}).");
                 }
+                else if (sym.Value == null)
+                {
+                    Errors.Add(line > 0
+                        ? $"Error línea {line}: Variable '{up.Identifier}' usada en '{up.Operator}' sin valor inicial."
+                        : $"Variable '{up.Identifier}' usada en '{up.Operator}' sin valor inicial.");
+                }
+                else if (sym.Type == DataType.Float)
+                {
+                    double cur = Convert.ToDouble(sym.Value, CultureInfo.InvariantCulture);
+                    double res = (up.Operator == "++") ? cur + 1.0 : cur - 1.0;
+                    Symbols.TryAssign(up.Identifier, res, DataType.Float, line, out _);
+                }
+                else // int
+                {
+                    int cur = (sym.Value is int i) ? i : Convert.ToInt32(sym.Value, CultureInfo.InvariantCulture);
+                    int res = (up.Operator == "++") ? cur + 1 : cur - 1;
+                    Symbols.TryAssign(up.Identifier, res, DataType.Int, line, out _);
+                }
 
-                if (sym.Value is int ivi)
-                    sym.Value = up.Operator == "++" ? ivi + 1 : ivi - 1;
-                else if (sym.Value is double dvd)
-                    sym.Value = up.Operator == "++" ? dvd + 1.0 : dvd - 1.0;
+                // 4) 👉 agrega dos veces la MISMA línea directamente en la lista
+                //    (esto evita cualquier efecto colateral de RegisterLine/Lookup)
+                if (line > 0)
+                {
+                    sym.Lines.Add(line); // lectura
+                    sym.Lines.Add(line); // escritura
+                }
 
-                if (line > 0 && !sym.Lines.Contains(line))
-                    sym.Lines.Add(line);
-                Annotate(up, sym.Type, sym.Value);
+                // 5) anotar y salir
+                var symAfter = Symbols.Lookup(up.Identifier);
+                Annotate(up, symAfter?.Type ?? DataType.Unknown, symAfter?.Value);
                 return;
             }
 
+
+            // INPUT  ⟶ no limpiar valor (conserva el actual)
             if (st is InputNode inp)
             {
-                int line = GetNextLine(inp.Identifier);
-                if (!Symbols.TryUse(inp.Identifier, line, out string err))
+                int line = ConsumeNextLine(inp.Identifier);
+
+                var sym = Symbols.Lookup(inp.Identifier);
+                if (sym == null)
                 {
-                    Symbols.EnsurePlaceholderUnknown(inp.Identifier, line);
-                    Errors.Add(err);
-                    Annotate(inp, DataType.Unknown, null);
+                    sym = Symbols.EnsurePlaceholderUnknown(inp.Identifier, -1);
+                    Errors.Add(line > 0
+                        ? $"Error línea {line}: Variable '{inp.Identifier}' no declarada."
+                        : $"Variable '{inp.Identifier}' no declarada.");
                 }
-                else
-                {
-                    var sym = Symbols.Lookup(inp.Identifier);
-                    if (sym != null) sym.Value = null; // lectura → valor desconocido
-                    Annotate(inp, sym?.Type ?? DataType.Unknown, null);
-                }
+
+                RegisterLine(inp.Identifier, line);
+                Annotate(inp, sym?.Type ?? DataType.Unknown, sym?.Value);
                 return;
             }
 
+            // OUTPUT
             if (st is OutputNode outp)
             {
                 if (outp.Value is ExpressionNode ex)
@@ -351,9 +348,11 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
                 return;
             }
 
+            // DEFAULT
             Annotate(st, DataType.Unknown, null);
         }
 
+        // ---------- Análisis de expresiones ----------
         private SemanticInfo AnalyzeExpr(ExpressionNode e)
         {
             if (e is LiteralNode lit)
@@ -372,19 +371,19 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
 
             if (e is IdentifierNode idn)
             {
-                int line = GetNextLine(idn.Name);
+                int line = ConsumeNextLine(idn.Name);
+
                 var sym = Symbols.Lookup(idn.Name);
                 if (sym == null)
                 {
-                    Symbols.EnsurePlaceholderUnknown(idn.Name, line);
+                    sym = Symbols.EnsurePlaceholderUnknown(idn.Name, -1);
                     Errors.Add(line > 0
                         ? $"Error línea {line}: Variable '{idn.Name}' no declarada."
                         : $"Variable '{idn.Name}' no declarada.");
-                    return Annotate(e, DataType.Unknown, null);
                 }
-                if (line > 0 && !sym.Lines.Contains(line))
-                    sym.Lines.Add(line);
-                return Annotate(e, sym.Type, sym.Value);
+
+                RegisterLine(idn.Name, line);
+                return Annotate(e, sym?.Type ?? DataType.Unknown, sym?.Value);
             }
 
             if (e is BinaryOpNode bin)
@@ -410,7 +409,7 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
                         Errors.Add($"Operadores lógicos '{op}' requieren bool.");
                     bool? v = null;
                     if (L.IsConst && R2.IsConst && L.ConstValue is bool lb && R2.ConstValue is bool rb)
-                        v = op == "&&" ? (lb && rb) : (lb || rb);
+                        v = (op == "&&") ? (lb && rb) : (lb || rb);
                     return Annotate(bin, DataType.Bool, v);
                 }
 
@@ -431,8 +430,7 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
                         bool? v = null;
                         if (L.IsConst && R2.IsConst)
                         {
-                            var pair = ToDoubles(L.ConstValue, R2.ConstValue);
-                            double ld = pair.ld; double rd = pair.rd;
+                            var (ld, rd) = ToDoubles(L.ConstValue, R2.ConstValue);
                             switch (op)
                             {
                                 case "<": v = ld < rd; break;
@@ -542,11 +540,12 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
             return info;
         }
 
+        // ---------- Árbol anotado ----------
         public TreeNode BuildAnnotatedTree(ASTNode node)
         {
             Func<SemanticInfo?, string> S = si =>
                 si == null ? "[type=?, val=?]" :
-                "[type=" + si.Type.ToSource() + ", val=" + (si.ConstValue == null ? "∅" : si.ConstValue.ToString()) + "]";
+                "[type=" + si.Type.ToSource() + ", val=" + FormatValue(si) + "]";
 
             Func<string, ASTNode, TreeNode> Make = (label, n) =>
             {
@@ -653,6 +652,25 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
                 return Make("Id: " + idn.Name, node);
 
             return new TreeNode(node.GetType().Name);
+        }
+
+        private string FormatValue(SemanticInfo? si)
+        {
+            if (si == null || si.ConstValue == null) return "∅";
+
+            if (si.Type == DataType.Float)
+            {
+                if (si.ConstValue is double dval) return dval.ToString("0.00", CultureInfo.InvariantCulture);
+                if (si.ConstValue is int ival) return ((double)ival).ToString("0.00", CultureInfo.InvariantCulture);
+            }
+
+            if (si.Type == DataType.Int && si.ConstValue is int intVal)
+                return intVal.ToString();
+
+            if (si.Type == DataType.Bool && si.ConstValue is bool boolVal)
+                return boolVal.ToString().ToLower();
+
+            return si.ConstValue.ToString() ?? "∅";
         }
     }
 }
