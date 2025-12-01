@@ -270,48 +270,62 @@ namespace IDE_COMPILADOR.AnalizadorSemantico
                 // 1) toma la línea textual del identificador (p.ej., 26 para "c--;")
                 int line = ConsumeNextLine(up.Identifier);
 
-                // 2) asegura el símbolo
-                var sym = Symbols.Lookup(up.Identifier) ?? Symbols.EnsurePlaceholderUnknown(up.Identifier, -1);
+                // 2) busca el símbolo
+                var sym = Symbols.Lookup(up.Identifier);
 
-                // 3) valida tipos/valor pero SIN salir antes de registrar las líneas
-                if (!sym.Type.IsNumeric())
+                // Si no existe la variable, sí queremos seguir marcando "no declarada"
+                if (sym == null)
                 {
+                    sym = Symbols.EnsurePlaceholderUnknown(up.Identifier, -1);
+                    Errors.Add(line > 0
+                        ? $"Error línea {line}: Variable '{up.Identifier}' no declarada."
+                        : $"Variable '{up.Identifier}' no declarada.");
+                }
+                else if (!sym.Type.IsNumeric())
+                {
+                    // Tipo no numérico: esto sí sigue siendo error
                     Errors.Add(line > 0
                         ? $"Error línea {line}: Operador '{up.Operator}' solo aplica a tipos numéricos (variable '{up.Identifier}' es {sym.Type.ToSource()})."
                         : $"Operador '{up.Operator}' solo aplica a tipos numéricos (variable '{up.Identifier}' es {sym.Type.ToSource()}).");
                 }
-                else if (sym.Value == null)
+                else
                 {
-                    Errors.Add(line > 0
-                        ? $"Error línea {line}: Variable '{up.Identifier}' usada en '{up.Operator}' sin valor inicial."
-                        : $"Variable '{up.Identifier}' usada en '{up.Operator}' sin valor inicial.");
-                }
-                else if (sym.Type == DataType.Float)
-                {
-                    double cur = Convert.ToDouble(sym.Value, CultureInfo.InvariantCulture);
-                    double res = (up.Operator == "++") ? cur + 1.0 : cur - 1.0;
-                    Symbols.TryAssign(up.Identifier, res, DataType.Float, line, out _);
-                }
-                else // int
-                {
-                    int cur = (sym.Value is int i) ? i : Convert.ToInt32(sym.Value, CultureInfo.InvariantCulture);
-                    int res = (up.Operator == "++") ? cur + 1 : cur - 1;
-                    Symbols.TryAssign(up.Identifier, res, DataType.Int, line, out _);
+                    // 👉 IMPORTANTE: si es numérico pero no tiene valor, NO queremos error.
+                    //     Asumimos 0 (int) o 0.0 (float) y aplicamos el ++/--.
+                    if (sym.Value == null)
+                    {
+                        sym.Value = (sym.Type == DataType.Float)
+                            ? (object)0.0
+                            : (object)0;
+                    }
+
+                    if (sym.Type == DataType.Float)
+                    {
+                        double cur = Convert.ToDouble(sym.Value, CultureInfo.InvariantCulture);
+                        double res = (up.Operator == "++") ? cur + 1.0 : cur - 1.0;
+                        Symbols.TryAssign(up.Identifier, res, DataType.Float, line, out _);
+                    }
+                    else // int
+                    {
+                        int cur = (sym.Value is int i) ? i : Convert.ToInt32(sym.Value, CultureInfo.InvariantCulture);
+                        int res = (up.Operator == "++") ? cur + 1 : cur - 1;
+                        Symbols.TryAssign(up.Identifier, res, DataType.Int, line, out _);
+                    }
                 }
 
-                // 4) 👉 agrega dos veces la MISMA línea directamente en la lista
-                //    (esto evita cualquier efecto colateral de RegisterLine/Lookup)
+                // 3) registrar lectura/escritura de la misma línea
                 if (line > 0)
                 {
                     sym.Lines.Add(line); // lectura
                     sym.Lines.Add(line); // escritura
                 }
 
-                // 5) anotar y salir
+                // 4) anotación
                 var symAfter = Symbols.Lookup(up.Identifier);
                 Annotate(up, symAfter?.Type ?? DataType.Unknown, symAfter?.Value);
                 return;
             }
+
 
 
             // INPUT  ⟶ no limpiar valor (conserva el actual)
