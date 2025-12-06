@@ -1,8 +1,10 @@
 ﻿using System;
 using System.IO;
 using System.Drawing;
+using System.Text;
 using System.Windows.Forms;
 using System.Linq;
+using IDE_COMPILADOR.CodigoIntermedio; //Agrega el archivo de codigo intermedio 
 using System.Collections.Generic; // List<T>, LINQ
 using System.Runtime.InteropServices;             // <- Win32 helpers
 using System.Globalization;                       // <<< NECESARIO
@@ -197,13 +199,15 @@ namespace IDE_COMPILADOR
             toolStrip1.Items.Add(semanticoButton);
 
             // Código intermedio
+            // Ejecutar programa (usando código intermedio)
             ToolStripButton compilarButton = new ToolStripButton
             {
                 Image = iconGenerarCodigo,
-                ToolTipText = "Generar Código Intermedio"
+                ToolTipText = "Ejecutar Programa"
             };
-            compilarButton.Click += (s, e) => EjecutarFase("Intermediate Code");
+            compilarButton.Click += (s, e) => EjecutarFase("Execution");
             toolStrip1.Items.Add(compilarButton);
+
         }
 
         #endregion
@@ -772,17 +776,219 @@ namespace IDE_COMPILADOR
 
                 case "Intermediate Code":
                     {
-                        tabName = "Resultados";
-                        MostrarMensajeTemporal(tabName, "Generando código intermedio...");
+                        string tabNameIC = "Resultados";
+                        var rtbResIC = GetOutputRichTextBox(tabNameIC);
+
+                        // 1) Léxico
+                        var lexico = new LexicalAnalyzer();
+                        var (tokens, lexErrs) = lexico.Analizar(txtEditor.Text);
+                        if (lexErrs.Count > 0)
+                        {
+                            if (rtbResIC != null)
+                                rtbResIC.Text = "Antes de generar código intermedio, hay errores léxicos:\r\n" +
+                                                string.Join("\r\n", lexErrs);
+                            tabOutput.SelectedTab = tabOutput.TabPages
+                                .Cast<TabPage>()
+                                .First(tp => tp.Text == tabNameIC);
+                            break;
+                        }
+
+                        // 2) Sintaxis
+                        var parserIC = new SyntaxAnalyzer(tokens);
+                        ProgramNode astIC = null;
+                        try { astIC = parserIC.Parse(); }
+                        catch { parserIC.Errors.Add("Error interno al parsear."); }
+
+                        if (parserIC.Errors.Count > 0 || astIC == null)
+                        {
+                            if (rtbResIC != null)
+                                rtbResIC.Text = "Antes de generar código intermedio, hay errores sintácticos:\r\n" +
+                                                string.Join("\r\n", parserIC.Errors);
+                            tabOutput.SelectedTab = tabOutput.TabPages
+                                .Cast<TabPage>()
+                                .First(tp => tp.Text == tabNameIC);
+                            break;
+                        }
+
+                        // 3) Semántico
+                        var semIC = new IDE_COMPILADOR.AnalizadorSemantico.SemanticAnalyzer();
+                        semIC.Analyze(astIC, tokens, txtEditor.Text);
+
+                        if (semIC.Errors.Count > 0)
+                        {
+                            if (rtbResIC != null)
+                                rtbResIC.Text = "Antes de generar código intermedio, hay errores semánticos:\r\n" +
+                                                string.Join("\r\n", semIC.Errors);
+                            tabOutput.SelectedTab = tabOutput.TabPages
+                                .Cast<TabPage>()
+                                .First(tp => tp.Text == tabNameIC);
+                            break;
+                        }
+
+                        // 4) Generar código intermedio
+                        var gen = new IntermediateCodeGenerator(semIC.Symbols);
+                        var code = gen.Generate(astIC);
+
+                        var lines = code
+                            .Select((ins, i) => $"{i:D3}: {ins}")
+                            .ToArray();
+
+                        // ⬇⬇⬇ AQUÍ va exactamente lo que tú querías en Resultados
+                        if (rtbResIC != null)
+                            rtbResIC.Text = "Código intermedio generado:\r\n\r\n" +
+                                            string.Join(Environment.NewLine, lines);
+
+                        tabOutput.SelectedTab = tabOutput.TabPages
+                            .Cast<TabPage>()
+                            .First(tp => tp.Text == tabNameIC);
+
+                        // Mostrar listado en la pestaña "Código Intermedio"
+                        RichTextBox rtbCI;
+
+                        var existente = tabCodigoIntermedio.Controls
+                            .OfType<RichTextBox>()
+                            .FirstOrDefault();
+
+                        if (existente != null)
+                        {
+                            rtbCI = existente;
+                        }
+                        else
+                        {
+                            rtbCI = new RichTextBox
+                            {
+                                Dock = DockStyle.Fill,
+                                Font = new Font("Consolas", 10),
+                                BackColor = Color.Black,
+                                ForeColor = Color.White,
+                                ReadOnly = true
+                            };
+                            tabCodigoIntermedio.Controls.Add(rtbCI);
+                        }
+
+                        rtbCI.Text = string.Join(Environment.NewLine, lines);
+                        tabAnalysis.SelectedTab = tabCodigoIntermedio;
                         break;
                     }
 
+
                 case "Execution":
                     {
-                        tabName = "Resultados";
-                        MostrarMensajeTemporal(tabName, "Ejecutando programa...");
+                        string tabNameExec = "Resultados";
+                        var rtbResExec = GetOutputRichTextBox(tabNameExec);
+
+                        // 1) Léxico
+                        var lexico = new LexicalAnalyzer();
+                        var (tokens, lexErrs) = lexico.Analizar(txtEditor.Text);
+                        if (lexErrs.Count > 0)
+                        {
+                            if (rtbResExec != null)
+                                rtbResExec.Text = "Antes de ejecutar, hay errores léxicos:\r\n" +
+                                                  string.Join("\r\n", lexErrs);
+                            tabOutput.SelectedTab = tabOutput.TabPages.Cast<TabPage>()
+                                .First(tp => tp.Text == tabNameExec);
+                            break;
+                        }
+
+                        // 2) Sintaxis
+                        var parserExec = new SyntaxAnalyzer(tokens);
+                        ProgramNode astExec = null;
+                        try { astExec = parserExec.Parse(); }
+                        catch { parserExec.Errors.Add("Error interno al parsear."); }
+
+                        if (parserExec.Errors.Count > 0 || astExec == null)
+                        {
+                            if (rtbResExec != null)
+                                rtbResExec.Text = "Antes de ejecutar, hay errores sintácticos:\r\n" +
+                                                  string.Join("\r\n", parserExec.Errors);
+                            tabOutput.SelectedTab = tabOutput.TabPages.Cast<TabPage>()
+                                .First(tp => tp.Text == tabNameExec);
+                            break;
+                        }
+
+                        // 3) Semántico
+                        var semExec = new IDE_COMPILADOR.AnalizadorSemantico.SemanticAnalyzer();
+                        semExec.Analyze(astExec, tokens, txtEditor.Text);
+
+                        if (semExec.Errors.Count > 0)
+                        {
+                            if (rtbResExec != null)
+                                rtbResExec.Text = "Antes de ejecutar, hay errores semánticos:\r\n" +
+                                                  string.Join("\r\n", semExec.Errors);
+                            tabOutput.SelectedTab = tabOutput.TabPages.Cast<TabPage>()
+                                .First(tp => tp.Text == tabNameExec);
+                            break;
+                        }
+
+                        // 4) Código intermedio
+                        var genExec = new IntermediateCodeGenerator(semExec.Symbols);
+                        var codeExec = genExec.Generate(astExec);
+           
+                        // --- NUEVO: mostrar también el código intermedio en la pestaña "Código Intermedio" ---
+                        var linesExec = codeExec
+                            .Select((ins, i) => $"{i:D3}: {ins}")
+                            .ToArray();
+
+                        RichTextBox rtbCIExec;
+
+                        var existenteExec = tabCodigoIntermedio.Controls
+                            .OfType<RichTextBox>()
+                            .FirstOrDefault();
+
+                        if (existenteExec != null)
+                        {
+                            rtbCIExec = existenteExec;
+                        }
+                        else
+                        {
+                            rtbCIExec = new RichTextBox
+                            {
+                                Dock = DockStyle.Fill,
+                                Font = new Font("Consolas", 10),
+                                BackColor = Color.Black,
+                                ForeColor = Color.White,
+                                ReadOnly = true
+                            };
+                            tabCodigoIntermedio.Controls.Add(rtbCIExec);
+                        }
+
+                        rtbCIExec.Text = string.Join(Environment.NewLine, linesExec);
+                        // si quieres que al ejecutar cambie automáticamente a esa pestaña:
+                        tabAnalysis.SelectedTab = tabCodigoIntermedio;
+                        // --- FIN BLOQUE NUEVO ---
+
+                        // 5) Ejecutar en la máquina de pila
+                        var vm = new StackMachine(codeExec, semExec.Symbols.AllEntries());
+                        vm.Run();
+
+
+               
+                        if (rtbResExec != null)
+                        {
+                            var sb = new StringBuilder();
+
+                            sb.AppendLine("Ejecución terminada.");
+                            sb.AppendLine();
+                            sb.AppendLine("Salida (cout):");
+                            sb.AppendLine(string.IsNullOrWhiteSpace(vm.OutputLog)
+                                ? "(sin salida por cout)"
+                                : vm.OutputLog.TrimEnd());
+                            sb.AppendLine();
+                            sb.AppendLine("Valores finales de las variables:");
+
+                            foreach (var sym in semExec.Symbols.AllEntries())
+                            {
+                                sb.AppendLine($"{sym.Name} ({sym.Type.ToSource()}): {sym.ValueAsString}");
+                            }
+
+                            rtbResExec.Text = sb.ToString();
+                        }
+
+                        tabOutput.SelectedTab = tabOutput.TabPages.Cast<TabPage>()
+                            .First(tp => tp.Text == tabNameExec);
                         break;
                     }
+
 
                 default:
                     {
