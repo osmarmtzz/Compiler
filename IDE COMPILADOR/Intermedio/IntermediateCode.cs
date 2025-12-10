@@ -35,7 +35,8 @@ namespace IDE_COMPILADOR.CodigoIntermedio
         JumpIfFalse,
         JumpIfTrue,
         Input,
-        Output
+        Output,
+        Halt              // <- nueva instrucción para terminar explícitamente
     }
 
     public class Instruction
@@ -100,6 +101,9 @@ namespace IDE_COMPILADOR.CodigoIntermedio
                         GenStmt(st);
                 }
             }
+
+            // Instrucción final para garantizar salida limpia
+            Emit(OpCode.Halt);
 
             return _code;
         }
@@ -166,7 +170,7 @@ namespace IDE_COMPILADOR.CodigoIntermedio
                 case WhileNode w:
                     {
                         // while cond body end
-                        int start = _code.Count;
+                        int start = _code.Count;     // etiqueta para volver a evaluar la condición
                         GenExpr(w.Condition);
                         int jFalse = Emit(OpCode.JumpIfFalse, null);
 
@@ -327,6 +331,9 @@ namespace IDE_COMPILADOR.CodigoIntermedio
         private readonly object?[] _memory;
         private readonly Dictionary<int, SymbolEntry> _symbolsByLoc;
 
+        // Límite de seguridad para evitar cuelgues por bucles infinitos
+        private const int MAX_STEPS = 1_000_000;
+
         public string OutputLog { get; private set; } = string.Empty;
 
         public StackMachine(IList<Instruction> code, IEnumerable<SymbolEntry> symbols)
@@ -341,14 +348,27 @@ namespace IDE_COMPILADOR.CodigoIntermedio
             foreach (var s in list)
                 _memory[s.Loc] = s.Value;
         }
+        private static bool IsNumericLike(object? v)
+        {
+            return v is int || v is double || v is float || v is bool;
+        }
+
 
         public void Run()
         {
             var stack = new Stack<object?>();
             int ip = 0;
+            int steps = 0;
 
-            while (ip < _code.Count)
+            while (ip >= 0 && ip < _code.Count)
             {
+                if (++steps > MAX_STEPS)
+                {
+                    OutputLog += "[Ejecución detenida: se alcanzó el límite máximo de pasos (posible bucle infinito)]"
+                                 + Environment.NewLine;
+                    break;
+                }
+
                 var inst = _code[ip];
 
                 switch (inst.Op)
@@ -371,11 +391,30 @@ namespace IDE_COMPILADOR.CodigoIntermedio
                         {
                             int idx = (int)inst.Operand!;
                             var val = stack.Pop();
-                            _memory[idx] = val;
+                            object? coerced = val;
 
                             if (_symbolsByLoc.TryGetValue(idx, out var se))
-                                se.Value = val;
+                            {
+                                switch (se.Type)
+                                {
+                                    case DataType.Int:
+                                        coerced = (int)ToDouble(val);     // cast a int
+                                        break;
+                                    case DataType.Float:
+                                        coerced = ToDouble(val);          // asegura double
+                                        break;
+                                    case DataType.Bool:
+                                        coerced = ToBool(val);            // asegura bool
+                                        break;
+                                    default:
+                                        coerced = val;
+                                        break;
+                                }
 
+                                se.Value = coerced;
+                            }
+
+                            _memory[idx] = coerced;
                             break;
                         }
 
@@ -455,14 +494,35 @@ namespace IDE_COMPILADOR.CodigoIntermedio
                         {
                             var b = stack.Pop();
                             var a = stack.Pop();
-                            stack.Push(Equals(a, b));
+
+                            if (IsNumericLike(a) && IsNumericLike(b))
+                            {
+                                var da = ToDouble(a);
+                                var db = ToDouble(b);
+                                stack.Push(Math.Abs(da - db) < 1e-9);   // compara numéricamente
+                            }
+                            else
+                            {
+                                stack.Push(Equals(a, b));
+                            }
                             break;
                         }
+
                     case OpCode.NotEqual:
                         {
                             var b = stack.Pop();
                             var a = stack.Pop();
-                            stack.Push(!Equals(a, b));
+
+                            if (IsNumericLike(a) && IsNumericLike(b))
+                            {
+                                var da = ToDouble(a);
+                                var db = ToDouble(b);
+                                stack.Push(Math.Abs(da - db) >= 1e-9);
+                            }
+                            else
+                            {
+                                stack.Push(!Equals(a, b));
+                            }
                             break;
                         }
 
@@ -524,46 +584,89 @@ namespace IDE_COMPILADOR.CodigoIntermedio
                     case OpCode.Input:
                         {
                             int idx = (int)inst.Operand!;
-                            string varName = _symbolsByLoc.TryGetValue(idx, out var se)
-                                ? se.Name
-                                : $"var{idx}";
+                            _symbolsByLoc.TryGetValue(idx, out var se);
 
-                            string prompt = $"Ingrese valor para {varName}:";
-                            string s = Interaction.InputBox(prompt, "Entrada", "0");
+                            string varName = se != null ? se.Name : $"var{idx}";
+                            var expectedType = se != null ? se.Type : DataType.Unknown;
 
-                            object? parsed = s;
-
-                            if (_symbolsByLoc.TryGetValue(idx, out var se2))
+                            while (true)
                             {
-                                switch (se2.Type)
+                                string tipoTexto = expectedType.ToString().ToLower(); // int, float, bool, unknown
+                                string prompt = $"Ingrese valor para {varName} ({tipoTexto}):";
+                                string s = Interaction.InputBox(prompt, "Entrada", "");
+
+                                // Si cancela o deja vacío, puedes decidir qué hacer.
+                                // Aquí solo salimos sin cambiar el valor.
+                                if (string.IsNullOrWhiteSpace(s))
+                                    break;
+
+                                object? parsed = null;
+                                bool ok = true;
+
+                                switch (expectedType)
                                 {
                                     case DataType.Int:
-                                        if (!int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var iv))
-                                            iv = 0;
-                                        parsed = iv;
+                                        if (int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var iv))
+                                        {
+                                            parsed = iv;
+                                        }
+                                        else
+                                        {
+                                            ok = false;
+                                        }
                                         break;
 
                                     case DataType.Float:
-                                        if (!double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var dv))
-                                            dv = 0.0;
-                                        parsed = dv;
+                                        if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var dv))
+                                        {
+                                            parsed = dv;
+                                        }
+                                        else
+                                        {
+                                            ok = false;
+                                        }
                                         break;
 
                                     case DataType.Bool:
-                                        if (!bool.TryParse(s, out var bv))
-                                            bv = false;
-                                        parsed = bv;
+                                        if (bool.TryParse(s, out var bv))
+                                        {
+                                            parsed = bv;
+                                        }
+                                        else
+                                        {
+                                            ok = false;
+                                        }
                                         break;
 
                                     default:
+                                        // Para tipos desconocidos o "string", aceptamos lo que sea
                                         parsed = s;
+                                        ok = true;
                                         break;
+                                }
+
+                                if (ok)
+                                {
+                                    _memory[idx] = parsed;
+                                    if (se != null)
+                                        se.Value = parsed;
+                                    break; // salir del while porque ya está bien
+                                }
+                                else
+                                {
+                                    MessageBox.Show(
+                                        $"Valor inválido para {varName}. Se esperaba un {tipoTexto}.",
+                                        "Error de entrada",
+                                        MessageBoxButtons.OK,
+                                        MessageBoxIcon.Warning
+                                    );
+                                    // y volvemos a pedirlo
                                 }
                             }
 
-                            _memory[idx] = parsed;
                             break;
                         }
+
 
                     case OpCode.Output:
                         {
@@ -572,6 +675,15 @@ namespace IDE_COMPILADOR.CodigoIntermedio
                             OutputLog += text + Environment.NewLine;
                             break;
                         }
+
+                    case OpCode.Halt:
+                        // Terminación explícita del programa
+                        ip = _code.Count;
+                        continue;
+
+                    default:
+                        // Si por alguna razón hay un opcode desconocido, no romper
+                        break;
                 }
 
                 ip++;
