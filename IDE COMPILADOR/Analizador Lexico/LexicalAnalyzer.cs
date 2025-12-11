@@ -80,6 +80,27 @@ namespace IDE_COMPILADOR.AnalizadorLexico
                 {
                     string lexema = sb.ToString(0, lastAcceptPos - pos + 1);
                     string tipo = ClasificarToken(lastAccept, lexema);
+
+                    // IGNORAR comentarios
+                    if (tipo == "ComentarioInline" || tipo == "ComentarioExtenso")
+                    {
+                        // avanzar posición y NO generar token
+                        for (int k = pos; k <= lastAcceptPos; k++)
+                        {
+                            if (entrada[k] == '\n')
+                            {
+                                linea++;
+                                columna = 1;
+                            }
+                            else
+                            {
+                                columna++;
+                            }
+                        }
+                        pos = lastAcceptPos + 1;
+                        continue;
+                    }
+
                     _tokens.Add(new Token(tipo, lexema, linea, startCol));
 
                     for (int k = pos; k <= lastAcceptPos; k++)

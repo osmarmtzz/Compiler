@@ -567,6 +567,142 @@ namespace IDE_COMPILADOR
         }
 
         #endregion
+        #region Helpers de Código Intermedio (mnemonicos y descripciones)
+
+        private static string GetMnemonic(OpCode op)
+        {
+            switch (op)
+            {
+                // Carga y almacenamiento
+                case OpCode.PushConst: return "ldc";   // load constant
+                case OpCode.Load: return "lod";   // load desde memoria
+                case OpCode.Store: return "sto";   // store en memoria
+
+                // Aritméticos
+                case OpCode.Add: return "adi";
+                case OpCode.Sub: return "sbi";
+                case OpCode.Mul: return "mpi";
+                case OpCode.Div: return "dvi";
+                case OpCode.Mod: return "mod";
+                case OpCode.Pow: return "pot";
+
+                // Comparaciones
+                case OpCode.Less: return "les";   // <
+                case OpCode.LessEq: return "leq";   // <=
+                case OpCode.Greater: return "grt";   // >
+                case OpCode.GreaterEq: return "geq";   // >=
+                case OpCode.Equal: return "equ";   // ==
+                case OpCode.NotEqual: return "neq";   // !=
+
+                // Lógicos
+                case OpCode.And: return "and";
+                case OpCode.Or: return "or";
+                case OpCode.Not: return "not";
+
+                // Control
+                case OpCode.Jump: return "ujp";   // unconditional jump
+                case OpCode.JumpIfFalse: return "fjp";   // false jump
+                case OpCode.JumpIfTrue: return "tjp";   // true jump (extra)
+                case OpCode.Halt: return "hlt";
+
+                // Entrada / salida
+                case OpCode.Input: return "rd";    // read
+                case OpCode.Output: return "wr";    // write
+
+                // Otros
+                case OpCode.Concat: return "cat";
+                case OpCode.Nop: return "nop";
+
+                default:
+                    return op.ToString().ToLower();
+            }
+        }
+
+        private static string FormatInstruction(Instruction inst)
+        {
+            string mnem = GetMnemonic(inst.Op);
+            return inst.Operand == null
+                ? mnem
+                : $"{mnem} {inst.Operand}";
+        }
+
+        private static string DescribeInstruction(Instruction inst)
+        {
+            switch (inst.Op)
+            {
+                // Carga y almacenamiento
+                case OpCode.PushConst:
+                    return $"carga constante literal {inst.Operand}";
+                case OpCode.Load:
+                    return $"carga variable desde posición {inst.Operand} a la pila";
+                case OpCode.Store:
+                    return $"almacena tope de la pila en variable de posición {inst.Operand}";
+
+                // Aritméticos
+                case OpCode.Add:
+                    return "suma los dos valores del tope de la pila";
+                case OpCode.Sub:
+                    return "resta los dos valores del tope de la pila";
+                case OpCode.Mul:
+                    return "multiplica los dos valores del tope de la pila";
+                case OpCode.Div:
+                    return "divide los dos valores del tope de la pila";
+                case OpCode.Mod:
+                    return "obtiene el residuo de la división (módulo)";
+                case OpCode.Pow:
+                    return "eleva el penúltimo valor al último (potencia)";
+
+                // Comparaciones
+                case OpCode.Less:
+                    return "compara si a < b";
+                case OpCode.LessEq:
+                    return "compara si a <= b";
+                case OpCode.Greater:
+                    return "compara si a > b";
+                case OpCode.GreaterEq:
+                    return "compara si a >= b";
+                case OpCode.Equal:
+                    return "compara si a == b";
+                case OpCode.NotEqual:
+                    return "compara si a != b";
+
+                // Lógicos
+                case OpCode.And:
+                    return "operación lógica AND entre los dos valores superiores";
+                case OpCode.Or:
+                    return "operación lógica OR entre los dos valores superiores";
+                case OpCode.Not:
+                    return "niega el valor lógico del tope de la pila";
+
+                // Control
+                case OpCode.Jump:
+                    return $"salta incondicionalmente a la instrucción {inst.Operand}";
+                case OpCode.JumpIfFalse:
+                    return $"si la condición es falsa, salta a la instrucción {inst.Operand}";
+                case OpCode.JumpIfTrue:
+                    return $"si la condición es verdadera, salta a la instrucción {inst.Operand}";
+                case OpCode.Halt:
+                    return "termina la ejecución del programa";
+
+                // Entrada / salida
+                case OpCode.Input:
+                    return $"lee valor desde entrada estándar y lo guarda en variable {inst.Operand}";
+                case OpCode.Output:
+                    return "escribe el valor del tope de la pila en salida estándar";
+
+                // Concatenación / otros
+                case OpCode.Concat:
+                    return "concatena los dos valores superiores de la pila como texto";
+                case OpCode.Nop:
+                    return "no realiza ninguna operación";
+
+                default:
+                    return "";
+            }
+        }
+
+        #endregion
+
 
         #region Lógica de Menú/Compilación
 
@@ -830,8 +966,10 @@ namespace IDE_COMPILADOR
                         var code = gen.Generate(astIC);
 
                         var lines = code
-                            .Select((ins, i) => $"{i:D3}: {ins}")
-                            .ToArray();
+     .Select((ins, i) =>
+         $"{i:D3}: {FormatInstruction(ins),-10}   ; {DescribeInstruction(ins)}")
+     .ToArray();
+
 
                         // ⬇⬇⬇ AQUÍ va exactamente lo que tú querías en Resultados
                         if (rtbResIC != null)
@@ -923,11 +1061,13 @@ namespace IDE_COMPILADOR
                         // 4) Código intermedio
                         var genExec = new IntermediateCodeGenerator(semExec.Symbols);
                         var codeExec = genExec.Generate(astExec);
-           
+
                         // --- NUEVO: mostrar también el código intermedio en la pestaña "Código Intermedio" ---
                         var linesExec = codeExec
-                            .Select((ins, i) => $"{i:D3}: {ins}")
-                            .ToArray();
+     .Select((ins, i) =>
+         $"{i:D3}: {FormatInstruction(ins),-10}   ; {DescribeInstruction(ins)}")
+     .ToArray();
+
 
                         RichTextBox rtbCIExec;
 
